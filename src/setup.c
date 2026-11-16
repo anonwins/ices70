@@ -360,7 +360,7 @@ static void ices_setup_activate_libshout_changes(const ices_config_t *ices_confi
 	char bitrate[8];
 
 	// Build the source agent string
-	snprintf(useragent, sizeof(useragent), "ices/" VERSION " libshout/%s",
+	snprintf(useragent, sizeof(useragent), "ices70/" VERSION " libshout/%s",
 		 shout_version(NULL, NULL, NULL));
 
 	// Copy each stream onto its libshout connection
@@ -405,8 +405,8 @@ static void ices_setup_activate_libshout_changes(const ices_config_t *ices_confi
 /* Display the command line options ICING uses */
 static void ices_setup_usage(void) {
 	// Show the accepted command line
-	printf("This is ices " VERSION "\n"
-	       "ices -station <name> -c <configfile> -S script -M <script>\n"
+	printf("This is ices70 " VERSION "\n"
+	       "ices70 -station <name> -c <configfile> -S script -M <script>\n"
 	       "Options:\n"
 	       "\t-station <name> (ignored here; the playlist script reads it)\n"
 	       "\t-c <configfile>\n"

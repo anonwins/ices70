@@ -123,7 +123,7 @@ double rg_get_track_gain(void);
 #define ICES_DEFAULT_BITRATE 128
 #define ICES_DEFAULT_ISPUBLIC 1
 #define ICES_DEFAULT_MODULE "ices"
-#define ICES_DEFAULT_CONFIGFILE "ices.conf"
+#define ICES_DEFAULT_CONFIGFILE "ices70.conf"
 #define ICES_DEFAULT_BASE_DIRECTORY "/tmp"
 #define ICES_DEFAULT_VERBOSE 0
 #define ICES_DEFAULT_REENCODE 0

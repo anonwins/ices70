@@ -132,28 +132,31 @@ static void ices_log_string(char *format, char *string) {
 	fprintf(stdout, format, string);
 }
 
-/* Open the ices logfile, create it if needed */
+/* Open the ices70 logfile, create it if needed */
 static int ices_log_open_logfile(void) {
 	char namespace[1024], buf[1024];
 	FILE *logfp;
 
+	// Ensure the base directory can hold the logfile name
 	if (!ices_config.base_directory ||
-	    strlen(ices_config.base_directory) > sizeof(namespace) - strlen("/ices.log") - 1) {
+	    strlen(ices_config.base_directory) > sizeof(namespace) - strlen("/ices70.log") - 1) {
 		ices_log_error("Base directory is invalid");
-		return 0;
+		return 0; // The base directory is invalid
 	}
 
-	snprintf(namespace, sizeof(namespace), "%s/ices.log",
+	// Build the logfile path
+	snprintf(namespace, sizeof(namespace), "%s/ices70.log",
 		 ices_config.base_directory);
 
+	// Open the logfile
 	logfp = fopen(namespace, "a");
-
 	if (!logfp) {
 		ices_log_error("Error while opening %s, error: %s", namespace,
 			       ices_util_strerror(errno, buf, 1024));
-		return 0;
+		return 0; // The logfile did not open
 	}
 
+	// Keep the logfile open for later writes
 	ices_config.logfile = logfp;
 #ifdef HAVE_SETLINEBUF
 	setlinebuf(ices_config.logfile);
@@ -162,7 +165,7 @@ static int ices_log_open_logfile(void) {
 	return 1;
 }
 
-/* Close ices' logfile */
+/* Close the ices70 logfile */
 static int ices_log_close_logfile(void) {
 	if (ices_config.logfile)
 		ices_util_fclose(ices_config.logfile);

@@ -54,7 +54,7 @@ int ices_playlist_script_initialize(playlist_module_t* pm) {
 		return 0; // No playlist script
 	}
 
-	// Resolve the script path (absolute, or next to the ices binary)
+	// Resolve the script path (absolute, or next to the ices70 binary)
 	cmd = pm->module;
 	if (cmd[0] != '/' && !(cmd[0] == '.' && (cmd[1] == '/' || (cmd[1] == '.' && cmd[2] == '/')))) {
 	    bindir = ices_util_get_bindir();

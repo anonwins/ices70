@@ -1,19 +1,18 @@
-# configure script for ices
+# configure script for ices70
 # $Id: configure.ac 8764 2005-01-16 18:47:32Z brendan $
 
-m4_define(ICES_MAJOR, 0)
-m4_define(ICES_MINOR, 4)
-m4_define(ICES_MICRO, 11)
-m4_define(ICES_VERSION,
-  m4_if(ICES_MICRO, 0, ICES_MAJOR.ICES_MINOR, ICES_MAJOR.ICES_MINOR.ICES_MICRO))
+m4_define(ICES_MAJOR, 70)
+m4_define(ICES_MINOR, 0)
+m4_define(ICES_MICRO, 0)
+m4_define(ICES_VERSION, ICES_MAJOR.ICES_MINOR.ICES_MICRO)
 
-AC_INIT([ices], ICES_VERSION, [icecast@xiph.org])
+AC_INIT([ices70], ICES_VERSION, [icecast@xiph.org])
 AC_PREREQ(2.52)
 AC_CONFIG_MACRO_DIRS([m4])
 AC_CONFIG_SRCDIR([src/ices.c])
 
 AC_CONFIG_FILES([Makefile src/Makefile src/playlist/Makefile conf/Makefile
- conf/ices.conf.dist])
+ conf/ices70.conf.dist])
 
 VERSION=ICES_VERSION
 
@@ -210,7 +209,7 @@ fi
 
 if test "$with_faad" != "no" -a "$have_faad" != "yes"
 then
-  AC_MSG_ERROR([FFmpeg libraries for MP4 decoding were not found (libavformat, libavcodec, libswresample, libavutil). Refusing to build ices0 without MP4 support.])
+  AC_MSG_ERROR([FFmpeg libraries for MP4 decoding were not found (libavformat, libavcodec, libswresample, libavutil). Refusing to build ices70 without MP4 support.])
 fi
 
 AC_ARG_WITH(flac,

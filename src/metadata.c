@@ -169,7 +169,7 @@ static int metadata_send(ices_stream_t* stream, const char* song) {
 	snprintf(request, sizeof(request),
 		"GET /admin/metadata?mode=updinfo&mount=%s&song=%s HTTP/1.0\r\n"
 		"Host: %s:%d\r\n"
-		"User-Agent: ices/" VERSION "\r\n"
+		"User-Agent: ices70/" VERSION "\r\n"
 		"Authorization: Basic %s\r\n"
 		"Connection: close\r\n\r\n",
 		mount_enc, song_enc, stream->host, stream->port, auth);

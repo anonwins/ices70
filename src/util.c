@@ -138,15 +138,17 @@ char *ices_util_read_line(FILE *fp) {
 
 /* Create a box-unique filename of a certain type */
 char *ices_util_get_random_filename(char *namespace, char *type) {
+	// Ensure both buffers were provided
 	if (!namespace || !type) {
 		ices_log("WARNING: ices_util_get_random_filename() called with NULL pointers.");
-		return NULL;
+		return NULL; // A required buffer was missing
 	}
 
 #ifdef _WIN32
 	doooh();
 #else
-	sprintf(namespace, "ices.%s.%d", type, (int) getpid());
+	// Build a name from the type and this process id
+	sprintf(namespace, "ices70.%s.%d", type, (int) getpid());
 	return namespace;
 #endif
 }

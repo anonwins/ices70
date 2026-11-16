@@ -13,7 +13,7 @@
   </Playlist>
 
   <Execution>
-    <!-- Directory for ices.log. -->
+    <!-- Directory for ices70.log. -->
     <BaseDirectory>/tmp</BaseDirectory>
   </Execution>
 
