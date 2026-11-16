@@ -40,9 +40,10 @@
 static volatile int finish_send = 0;
 
 static int stream_connect(ices_stream_t* stream);
+static int stream_send_data(ices_stream_t* stream, unsigned char* buf, size_t len);
+static int stream_send_one(ices_stream_t* stream, unsigned char* buf, size_t len);
 static int stream_send(ices_config_t* config, input_stream_t* source);
 static int stream_send_silence(ices_config_t* config, int* announced);
-static int stream_send_bytes(ices_config_t* config, unsigned char* buf, size_t len);
 static int stream_open_source(ices_config_t* config, input_stream_t* source);
 static int stream_mp3_can_copy(ices_config_t* config, input_stream_t* source);
 
