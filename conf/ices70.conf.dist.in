@@ -35,8 +35,6 @@
     <Public>1</Public>
 
     <Bitrate>128</Bitrate>
-    <!-- Reencode is required for Vorbis, FLAC, MP4, crossfade, and ReplayGain. -->
-    <Reencode>1</Reencode>
     <Samplerate>44100</Samplerate>
     <Channels>2</Channels>
   </Stream>

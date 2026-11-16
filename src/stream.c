@@ -1,6 +1,6 @@
 /* stream.c
  * - Functions for streaming in ices
- * Copyright (c) 2000 Alexander Hav�ng
+ * Copyright (c) 2000 Alexander Havang
  * Copyright (c) 2001-4 Brendan Cully <brendan@xiph.org>
  *
  * This program is free software; you can redistribute it and/or
@@ -16,74 +16,75 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
- *
- * $Id: stream.c 7428 2004-07-31 09:11:47Z brendan $
  */
 
 #include "definitions.h"
 #include "metadata.h"
 #include "replaygain.h"
+#include "in_ffmpeg.h"
 
-#ifdef HAVE_LIBVORBISFILE
-#include "in_vorbis.h"
-#endif
-#ifdef HAVE_LIBFAAD
-#include "in_mp4.h"
-#endif
-#ifdef HAVE_LIBFLAC
-#include "in_flac.h"
-#endif
-
+#include <string.h>
 #include <sys/time.h>
 #include <time.h>
-
-/* needed for directory checking */
 #include <sys/types.h>
 #include <sys/stat.h>
-
+#include <unistd.h>
+#include <errno.h>
 
 #define INPUT_BUFSIZ 4096
 #define OUTPUT_BUFSIZ 32768
+#define SILENCE_SAMPLES 1152
 /* sleep this long in ms when every stream has errors */
 #define ERROR_DELAY 999
 
-typedef struct {
-	char* data;
-	size_t len;
-} buffer_t;
-
 static volatile int finish_send = 0;
 
-/* Private function declarations */
 static int stream_connect(ices_stream_t* stream);
 static int stream_send(ices_config_t* config, input_stream_t* source);
-static int stream_send_data(ices_stream_t* stream, unsigned char* buf, size_t len);
-static int stream_open_source(input_stream_t* source);
-static int stream_needs_reencoding(input_stream_t* source, ices_stream_t* stream);
+static int stream_send_silence(ices_config_t* config, int* announced);
+static int stream_send_bytes(ices_config_t* config, unsigned char* buf, size_t len);
+static int stream_open_source(ices_config_t* config, input_stream_t* source);
+static int stream_mp3_can_copy(ices_config_t* config, input_stream_t* source);
 
-/* Public function definitions */
-
-/* Top level streaming function, called once from main() to
- * connect to server and start streaming */
+/* Top level streaming function, called once from main() */
 void ices_stream_loop(ices_config_t* config) {
 	int consecutive_errors = 0;
+	int silence_announced = 0;
 	input_stream_t source;
-	ices_stream_t* stream;
 	int rc;
 
 	while (1) {
-		// Get the next file
-		source.path = ices_playlist_get_next();
+		// Ask once, then wait for a path and a title
+		ices_playlist_ask();
+		rc = ices_playlist_poll();
+
+		// Helper died: it has been started again. Ask on the next pass
+		if (rc < 0)
+			continue;
+
+		// No answer yet: keep the mount up with silence
+		if (rc == 0) {
+			if (stream_send_silence(config, &silence_announced) < 0) {
+				consecutive_errors++;
+				if (consecutive_errors > 10) {
+					ices_log("Exiting after 10 consecutive errors.");
+					ices_setup_shutdown();
+				}
+			}
+			continue;
+		}
+
+		// Take the path the helper just wrote
+		silence_announced = 0;
+		memset(&source, 0, sizeof(source));
+		source.path = ices_playlist_take();
+		source.fd = -1;
 
 		// Ensure the playlist returned a path
 		if (!(source.path && source.path[0])) {
-			ices_log("Playlist handler returned an empty file name; no media to play, shutting down.");
-			ices_setup_shutdown();
+			ices_util_free(source.path);
+			continue; // Skip file: The helper wrote an empty path
 		}
-
-		// Clear the previous title and remember the filename
-		ices_metadata_set(NULL, NULL);
-		ices_metadata_set_file(source.path);
 
 		// Ensure this pass has not failed ten times
 		if (consecutive_errors > 10) {
@@ -92,45 +93,29 @@ void ices_stream_loop(ices_config_t* config) {
 			ices_setup_shutdown();
 		}
 
+		// Clear the previous title and remember the filename
+		ices_metadata_set(NULL, NULL);
+		ices_metadata_set_file(source.path);
+
 		// Open the file
-		if (stream_open_source(&source) < 0) {
+		if (stream_open_source(config, &source) < 0) {
 			ices_log("Error opening %s: %s", source.path, ices_log_get_error());
 			ices_util_free(source.path);
 			consecutive_errors++;
 			continue; // Skip file: It did not open
 		}
 
-		// If the file is not MP3, ensure reencode is on
-		if (!source.read)
-			for (stream = config->streams; stream; stream = stream->next)
-				if (!stream->reencode) {
-					ices_log("Cannot play %s without reencoding", source.path);
-					source.close(&source);
-					ices_util_free(source.path);
-					consecutive_errors++;
-					continue; // Skip stream: Reencode is off
-				}
-
 		// Send the file
 		rc = stream_send(config, &source);
-
-		// Close the file
 		source.close(&source);
-
-		// If the send failed, count the error
 		if (rc < 0) {
 			ices_log("Encountered error while transfering %s: %s", source.path, ices_log_get_error());
-
-			consecutive_errors++;
-
 			ices_util_free(source.path);
+			consecutive_errors++;
 			continue; // Skip file: The send failed
 		}
 
-		// Clear the error count
 		consecutive_errors = 0;
-
-		// Free the path
 		ices_util_free(source.path);
 	}
 }
@@ -140,282 +125,228 @@ void ices_stream_next(void) {
 	finish_send = 1;
 }
 
-/* This function is called to stream a single file */
-static int stream_send(ices_config_t* config, input_stream_t* source) {
-	ices_stream_t* stream;
-	unsigned char ibuf[INPUT_BUFSIZ];
+/* Send one buffer to one stream, and pause before a reconnect */
+static int stream_send_one(ices_stream_t* stream, unsigned char* buf, size_t len) {
+	while (stream_send_data(stream, buf, len) < 0) {
+		struct timeval delay;
 
-	char namespace[1024];
-	ssize_t len;
-	ssize_t olen;
-	int samples;
-	int rc;
-	int do_sleep;
-#ifdef HAVE_LIBLAME
-	int decode = 0;
-	buffer_t obuf;
-	ices_plugin_t *plugin;
-	/* worst case decode: 22050 Hz at 8kbs = 44.1 samples/byte */
-	static int16_t left[INPUT_BUFSIZ * 45];
-	static int16_t right[INPUT_BUFSIZ * 45];
-	static int16_t* rightp;
-#endif
-
-#ifdef HAVE_LIBLAME
-	// Prepare the encode buffer when this stream reencodes
-	obuf.data = NULL;
-	obuf.len = 0;
-
-	if (config->reencode) {
-		ices_reencode_reset(source);
-		if (config->plugins) {
-			decode = 1;
-			for (plugin = config->plugins; plugin; plugin = plugin->next)
-				plugin->new_track(source);
-		} else
-			for (stream = config->streams; stream; stream = stream->next)
-				if (stream->reencode && stream_needs_reencoding(source, stream)) {
-					decode = 1;
-					break;
-				}
+		if (stream->errs > 10) {
+			ices_log("Too many stream errors, giving up");
+			ices_setup_shutdown();
+		}
+		ices_log("Error during send: %s", ices_log_get_error());
+		delay.tv_sec = ERROR_DELAY / 1000;
+		delay.tv_usec = ERROR_DELAY % 1000 * 1000;
+		select(1, NULL, NULL, NULL, &delay);
 	}
-
-	if (decode) {
-		obuf.len = OUTPUT_BUFSIZ;
-		if (!(obuf.data = malloc(OUTPUT_BUFSIZ))) {
-			ices_log_error("Error allocating encode buffer");
-			return -1;
-		}
-	}
-#endif
-
-	// Clear the stream error counts
-	for (stream = config->streams; stream; stream = stream->next)
-		stream->errs = 0;
-
-	// Announce the track and send its title
-	ices_log("Playing %s", source->path);
-
-	ices_metadata_update(0);
-
-	// Read and send until the track ends
-	finish_send = 0;
-	while (!finish_send) {
-		len = samples = 0;
-		// Read the next input
-		if (source->read) {
-			len = source->read(source, ibuf, sizeof(ibuf));
-#ifdef HAVE_LIBLAME
-			if (decode) {
-				samples = ices_reencode_decode(ibuf, len, sizeof(left), left, right);
-				if (samples < 0) {
-					ices_log_debug("ices_reencode_decode reports %d samples.", samples);
-					goto err;
-				}
-			}
-
-		} else if (source->readpcm) {
-			len = samples = source->readpcm(source, sizeof(left), left, right);
-			if (samples < 0) {
-				ices_log_debug("source->readpcm returned %d samples!", samples);
-				goto err;
-			}
-#endif
-    }
-
-	// Apply ReplayGain
-	if (samples > 0) {
-		/* ices_log_debug("Applying track gain to %d samples.", samples); */
-		rg_apply(left, samples);
-		rg_apply(right, samples);
-	} else if (samples < 0) {
-		ices_log_debug("Decoder reported error %d.", samples);
-		goto err;
-    }
-
-#ifdef HAVE_LIBLAME
-		// Run the crossfade plugin
-		for (plugin = config->plugins; plugin; plugin = plugin->next)
-			if (samples > 0)
-				samples = plugin->process(samples, left, right);
-#endif
-
-		// Ensure the read produced data
-		if (len == 0) {
-			ices_log_debug("Done sending");
-			break;
-		}
-		if (len < 0) {
-			ices_log_error("Read error: %s", ices_util_strerror(errno, namespace, 1024));
-			goto err;
-		}
-
-		// Send the buffer to each stream
-		do_sleep = 1;
-		while (do_sleep) {
-			rc = olen = 0;
-			for (stream = config->streams; stream; stream = stream->next) {
-				/* don't reencode if the source is MP3 and the same bitrate */
-#ifdef HAVE_LIBLAME
-				if (stream->reencode && (config->plugins || stream_needs_reencoding(source, stream))) {
-					if (samples > 0) {
-						/* for some reason we have to manually duplicate right from left to get
-						 * LAME to output stereo from a mono source */
-						if (source->channels == 1 && stream->out_numchannels != 1)
-							rightp = left;
-						else
-							rightp = right;
-						if (obuf.len < (unsigned int)(7200 + samples + samples / 4)) {
-							char *tmpbuf;
-
-							/* pessimistic estimate from lame.h */
-							obuf.len = 7200 + 5 * samples / 2;
-							if (!(tmpbuf = realloc(obuf.data, obuf.len))) {
-								ices_log_error("Error growing output buffer, aborting track");
-								goto err;
-							}
-							obuf.data = tmpbuf;
-							ices_log_debug("Grew output buffer to %d bytes", obuf.len);
-						}
-						if ((olen = ices_reencode(stream, samples, left, rightp, (unsigned char *)obuf.data, obuf.len)) < -1) {
-							ices_log_error("Reencoding error, aborting track");
-							goto err;
-						} else if (olen == -1) {
-							char *tmpbuf;
-
-							if ((tmpbuf = realloc(obuf.data, obuf.len + OUTPUT_BUFSIZ))) {
-								obuf.data = tmpbuf;
-								obuf.len += OUTPUT_BUFSIZ;
-								ices_log_debug("Grew output buffer to %d bytes", obuf.len);
-							} else
-								ices_log_debug("%d byte output buffer is too small", obuf.len);
-						} else if (olen > 0)
-							rc = stream_send_data(stream, (unsigned char *)obuf.data, olen);
-					}
-				} else
-#endif
-				rc = stream_send_data(stream, ibuf, len);
-
-				if (rc < 0) {
-					if (stream->errs > 10) {
-						ices_log("Too many stream errors, giving up");
-						ices_setup_shutdown();
-					}
-					ices_log("Error during send: %s", ices_log_get_error());
-				} else
-					do_sleep = 0;
-				/* this is so if we have errors on every stream we pause before
-	 * attempting to reconnect */
-				if (do_sleep) {
-					struct timeval delay;
-					delay.tv_sec = ERROR_DELAY / 1000;
-					delay.tv_usec = ERROR_DELAY % 1000 * 1000;
-
-					select(1, NULL, NULL, NULL, &delay);
-				}
-			}
-		}
-	}
-
-#ifdef HAVE_LIBLAME
-	// Flush the encoder when crossfade is off
-	if (!config->plugins) /* flush is only necessary if we're not continuously reencoding */
-		for (stream = config->streams; stream; stream = stream->next)
-			if (stream->reencode && stream_needs_reencoding(source, stream)) {
-				len = ices_reencode_flush(stream, (unsigned char *)obuf.data, obuf.len);
-				if (len > 0)
-					rc = stream_send_data(stream, (unsigned char *)obuf.data, len);
-			}
-
-	if (obuf.data)
-		free(obuf.data);
-#endif
-
 	return 0;
-
- err:
-#ifdef HAVE_LIBLAME
-	if (obuf.data)
-		free(obuf.data);
-#endif
-	return -1;
 }
 
-/* open up path, figure out what kind of input it is, and set up source */
-static int stream_open_source(input_stream_t* source) {
+/* Drain the encoder into the mount. A copied MP3 follows these bytes. */
+static void stream_flush_encoder(ices_config_t* config) {
+	ices_stream_t* stream;
+	unsigned char buf[OUTPUT_BUFSIZ];
+	int len;
+
+	if (!ices_reencode_is_dirty())
+		return;
+	for (stream = config->streams; stream; stream = stream->next) {
+		len = ices_reencode_flush(stream, buf, sizeof(buf));
+		if (len > 0)
+			stream_send_one(stream, buf, (size_t)len);
+	}
+	ices_reencode_mark_clean();
+}
+
+/* Encode PCM and send it. Crossfade runs on these samples. */
+static int stream_send_pcm(ices_config_t* config, int16_t* left, int16_t* right, int samples) {
+	ices_stream_t* stream;
+	ices_plugin_t* plugin;
+	unsigned char obuf[OUTPUT_BUFSIZ];
+	int16_t* rightp;
+	int olen;
+
+	if (samples <= 0)
+		return 0;
+	for (plugin = config->plugins; plugin; plugin = plugin->next)
+		samples = plugin->process(samples, left, right);
+	if (samples <= 0)
+		return 0;
+
+	for (stream = config->streams; stream; stream = stream->next) {
+		rightp = right;
+		olen = ices_reencode(stream, samples, left, rightp, obuf, sizeof(obuf));
+		if (olen < -1) {
+			ices_log_error("Reencoding error");
+			return -1;
+		}
+		if (olen > 0)
+			stream_send_one(stream, obuf, (size_t)olen);
+	}
+	return 0;
+}
+
+/* Copy MP3 frames. Drain the encoder first so its tail is not stuck. */
+static int stream_send_copy(ices_config_t* config, input_stream_t* source) {
+	ices_stream_t* stream;
+	unsigned char ibuf[INPUT_BUFSIZ];
+	ssize_t len;
+
+	stream_flush_encoder(config);
+	ices_log("Playing %s", source->path);
+	ices_metadata_update(0);
+	finish_send = 0;
+	while (!finish_send) {
+		len = source->read(source, ibuf, sizeof(ibuf));
+		if (len == 0)
+			break;
+		if (len < 0) {
+			ices_log_error("Read error: %s", ices_log_get_error());
+			return -1;
+		}
+		for (stream = config->streams; stream; stream = stream->next)
+			stream_send_one(stream, ibuf, (size_t)len);
+	}
+	return 0;
+}
+
+/* Decode the file to PCM and encode it with LAME */
+static int stream_send_decoded(ices_config_t* config, input_stream_t* source) {
+	ices_plugin_t* plugin;
+	int16_t left[INPUT_BUFSIZ * 4];
+	int16_t right[INPUT_BUFSIZ * 4];
+	ssize_t samples;
+
+	for (plugin = config->plugins; plugin; plugin = plugin->next)
+		plugin->new_track(source);
+
+	ices_log("Playing %s", source->path);
+	ices_metadata_update(0);
+	finish_send = 0;
+	while (!finish_send) {
+		samples = source->readpcm(source, sizeof(left), left, right);
+		if (samples == 0)
+			break;
+		if (samples < 0) {
+			ices_log_error("Decode error");
+			return -1;
+		}
+		rg_apply(left, (int)samples);
+		rg_apply(right, (int)samples);
+		if (stream_send_pcm(config, left, right, (int)samples) < 0)
+			return -1;
+	}
+	return 0;
+}
+
+/* Send one file. A PCM reader is encoded. An MP3 reader is copied. */
+static int stream_send(ices_config_t* config, input_stream_t* source) {
+	if (source->readpcm)
+		return stream_send_decoded(config, source);
+	return stream_send_copy(config, source);
+}
+
+/* One frame of silence through the crossfader and LAME. The first frame clears the title. */
+static int stream_send_silence(ices_config_t* config, int* announced) {
+	int16_t left[SILENCE_SAMPLES];
+	int16_t right[SILENCE_SAMPLES];
+
+	memset(left, 0, sizeof(left));
+	memset(right, 0, sizeof(right));
+
+	// Clear the title once, when the wait starts
+	if (!*announced) {
+		ices_playlist_clear_metadata();
+		ices_metadata_set(NULL, NULL);
+		ices_metadata_set_file(NULL);
+		ices_metadata_update(0);
+		*announced = 1;
+	}
+
+	// Do not call new_track. An empty file would make the crossfader skip the next fade
+	return stream_send_pcm(config, left, right, SILENCE_SAMPLES);
+}
+
+/* A matching MP3 is copied. ReplayGain, crossfade, or a different format encodes it. */
+static int stream_mp3_can_copy(ices_config_t* config, input_stream_t* source) {
+	ices_stream_t* stream;
+
+	if (config->plugins)
+		return 0;
+	if (rg_get_track_gain() != 0.0)
+		return 0;
+	if (!source->bitrate)
+		return 0; // VBR, or a header bitrate the stream does not use
+	for (stream = config->streams; stream; stream = stream->next) {
+		if (source->bitrate != (unsigned int)stream->bitrate)
+			return 0;
+		if (stream->out_samplerate > 0 && source->samplerate != (unsigned int)stream->out_samplerate)
+			return 0;
+		if (stream->out_numchannels > 0 && source->channels != (unsigned int)stream->out_numchannels)
+			return 0;
+	}
+	return 1;
+}
+
+/* Open path. Copy a matching MP3. Decode everything else with FFmpeg. */
+static int stream_open_source(ices_config_t* config, input_stream_t* source) {
 	char buf[INPUT_BUFSIZ];
-	size_t len;
+	ssize_t len;
 	int fd;
 	int rc;
 
 	source->filesize = 0;
 	source->bytes_read = 0;
 	source->channels = 2;
+	source->bitrate = 0;
+	source->read = NULL;
+	source->readpcm = NULL;
+	source->close = NULL;
+	rg_set_track_gain(0.0);
 
-	if (source->path[0] == '-' && source->path[1] == '\0') {
-		ices_log_debug("Reading audio from stdin");
-		fd = 0;
-	} else if ((fd = open(source->path, O_RDONLY)) < 0) {
+	if ((fd = open(source->path, O_RDONLY)) < 0) {
 		ices_util_strerror(errno, buf, sizeof(buf));
 		ices_log_error("Error opening: %s", buf);
-
 		return -1;
 	}
-
-	/* check if it is a regular file and not a directory, device or something else */
-	if ((fd > 0) && (ices_util_is_regular_file(fd) != 1)) {
-		/* error already logged */
-		close(fd);
-		return -1;
-	}
-
 	source->fd = fd;
 
+	if (ices_util_is_regular_file(fd) != 1) {
+		close(fd);
+		source->fd = -1;
+		return -1;
+	}
+
 	if ((rc = lseek(fd, 0, SEEK_END)) >= 0) {
-		source->filesize = rc;
+		source->filesize = (size_t)rc;
 		lseek(fd, 0, SEEK_SET);
 	}
 
-	if ((len = read(fd, buf, sizeof(buf))) <= 0) {
-		ices_util_strerror(errno, buf, sizeof(buf));
-		ices_log_error("Error reading header: %s", source->path, buf);
-
+	len = read(fd, buf, sizeof(buf));
+	if (len <= 0) {
+		ices_log_error("Error reading header of %s", source->path);
 		close(fd);
+		source->fd = -1;
 		return -1;
 	}
 
-#ifdef HAVE_LIBFLAC
-	if (!(rc = ices_flac_open(source, buf, len)))
+	// Try the MP3 frame reader. A match is copied. Anything else is decoded.
+	rc = ices_mp3_open(source, buf, (size_t)len);
+	if (rc == 0 && stream_mp3_can_copy(config, source)) {
+		source->readpcm = NULL;
 		return 0;
-	if (rc < 0) {
-		close(fd);
-		return -1;
 	}
-#endif
-
-#ifdef HAVE_LIBFAAD
-	if (!(rc = ices_mp4_open(source, buf, len)))
-		return 0;
-	if (rc < 0) {
-		close(fd);
-		return -1;
-	}
-#endif
-
-	if (!(rc = ices_mp3_open(source, buf, len)))
-		return 0;
-	if (rc < 0) {
-		close(fd);
-		return -1;
+	if (rc == 0 && source->close)
+		source->close(source);
+	else if (source->fd >= 0) {
+		close(source->fd);
+		source->fd = -1;
 	}
 
-#ifdef HAVE_LIBVORBISFILE
-	if (!(rc = ices_vorbis_open(source, buf, len)))
-		return 0;
-#endif
-
-	close(fd);
-	return -1;
+	// Decode from the start. The MP3 attempt may have set ReplayGain already.
+	rg_set_track_gain(0.0);
+	source->fd = -1;
+	return ices_ffmpeg_open(source);
 }
 
 /* wrapper for shout_send_data, shout_sleep with error handling */
@@ -431,14 +362,12 @@ static int stream_send_data(ices_stream_t* stream, unsigned char* buf, size_t le
 	shout_sync(stream->conn);
 	if (shout_send(stream->conn, buf, len) == SHOUTERR_SUCCESS) {
 		stream->errs = 0;
-
 		return 0;
 	}
 
-	ices_log_error("Libshout reported send error, disconnecting: %s",shout_get_error(stream->conn));
+	ices_log_error("Libshout reported send error, disconnecting: %s", shout_get_error(stream->conn));
 	shout_close(stream->conn);
 	stream->errs++;
-
 	return -1;
 }
 
@@ -456,26 +385,11 @@ static int stream_connect(ices_stream_t* stream) {
 			       shout_get_error(stream->conn));
 		stream->connect_delay = now + 1;
 		stream->errs++;
-
 		return -1;
 	}
 
 	ices_log("Mounted on http://%s:%d%s%s", shout_get_host(stream->conn),
 		 shout_get_port(stream->conn),
 		 (mount && mount[0] == '/') ? "" : "/", ices_util_nullcheck(mount));
-
-	return 0;
-}
-
-static int stream_needs_reencoding(input_stream_t* source, ices_stream_t* stream) {
-	if (rg_get_track_gain())
-		return 1;
-	if (!source->read || source->bitrate != (unsigned int) stream->bitrate
-	    || (stream->out_samplerate > 0 &&
-		source->samplerate != (unsigned int) stream->out_samplerate)
-	    || (stream->out_numchannels > 0 &&
-		source->channels != (unsigned int) stream->out_numchannels))
-		return 1;
-
 	return 0;
 }

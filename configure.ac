@@ -137,14 +137,12 @@ then
 
   if test "$have_LAME" != "no"
   then
-    AC_CHECK_LIB(mp3lame, lame_encode_flush_nogap, [
-      AC_CHECK_LIB(mp3lame, hip_decode_init, [
+    AC_CHECK_LIB(mp3lame, lame_init, [
         have_LAME="yes"
         LIBS="$LIBS -lmp3lame"
         LIBM="-lm"
         ICES_OBJECTS="$ICES_OBJECTS reencode.o"
         AC_DEFINE(HAVE_LIBLAME, 1, [Define if you have the LAME MP3 library])
-      ], [have_LAME="no"], -lm)
       ], [have_LAME="no"], -lm)
   fi
 fi
@@ -154,91 +152,14 @@ then
   AC_MSG_ERROR([Could not find a valid LAME library installation])
 fi
 
-AC_ARG_WITH(vorbis,
-  [[  --with-vorbis[=DIR]     support for vorbis transcoding using libvorbisfile [in DIR]]])
-
-have_vorbis="no"
-if test "$with_vorbis" != "no"
+dnl Every file that is not a copied MP3 is decoded with FFmpeg.
+if pkg-config --exists libavformat libavcodec libswresample libavutil
 then
-  if test -n "$with_vorbis" -a "$with_vorbis" != "yes"
-  then
-    CPPFLAGS="$CPPFLAGS -I$with_vorbis/include"
-    LDFLAGS="$LDFLAGS -L$with_vorbis/lib"
-  fi
-
-  AC_CHECK_HEADER(vorbis/vorbisfile.h, have_vorbis="maybe")
-  if test "$have_vorbis" != "no"
-  then
-    AC_CHECK_LIB(vorbisfile, ov_open, [
-      LIBS="$LIBS -lvorbisfile -lvorbis -logg"
-      AC_DEFINE(HAVE_LIBVORBISFILE, 1, [Define if you have libvorbisfile])
-      ICES_OBJECTS="$ICES_OBJECTS in_vorbis.o"
-      have_vorbis="yes"
-    ],[have_vorbis="no"],-lvorbis -logg)
-  fi
-fi
-
-if test "$have_vorbis" != "yes"
-then
-  AC_MSG_ERROR([Could not find libvorbisfile])
-fi
-
-AC_ARG_WITH(faad,
-  [[  --with-faad[=DIR]     support for MP4 audio decoding using FFmpeg]])
-
-if test "$have_LAME" != "yes" -a "$with_faad" != "no"
-then
-  AC_MSG_ERROR([MP4 decoding requires LAME])
-fi
-
-have_faad="no"
-if test "$with_faad" != "no"
-then
-  dnl MP4 audio is demuxed and decoded with FFmpeg. libmp4v2 is not in Ubuntu.
-  if pkg-config --exists libavformat libavcodec libswresample libavutil
-  then
-    have_faad="yes"
-    CFLAGS="$CFLAGS `pkg-config --cflags libavformat libavcodec libswresample libavutil`"
-    LIBS="$LIBS `pkg-config --libs libavformat libavcodec libswresample libavutil`"
-    AC_DEFINE(HAVE_LIBFAAD, 1, [Define if MP4 decoding via FFmpeg is available])
-    ICES_OBJECTS="$ICES_OBJECTS in_mp4.o"
-  else
-    have_faad="no"
-  fi
-fi
-
-if test "$with_faad" != "no" -a "$have_faad" != "yes"
-then
-  AC_MSG_ERROR([FFmpeg libraries for MP4 decoding were not found (libavformat, libavcodec, libswresample, libavutil). Refusing to build ices70 without MP4 support.])
-fi
-
-AC_ARG_WITH(flac,
-  [[  --with-flac[=DIR]     support for FLAC transcoding using libFLAC [in DIR]]])
-
-have_flac="no"
-if test "$with_flac" != "no"
-then
-  if test -n "$with_flac" -a "$with_flac" != "yes"
-  then
-    CPPFLAGS="$CPPFLAGS -I$with_flac/include"
-    LDFLAGS="$LDFLAGS -L$with_flac/lib"
-  fi
-
-  AC_CHECK_HEADER([FLAC/stream_decoder.h], have_flac="maybe")
-  if test "$have_flac" != "no"
-  then
-    AC_CHECK_LIB(FLAC, FLAC__stream_decoder_new, [
-      LIBS="$LIBS -lFLAC"
-      AC_DEFINE(HAVE_LIBFLAC, 1, [Define if you have libFLAC])
-      ICES_OBJECTS="$ICES_OBJECTS in_flac.o"
-      have_flac="yes"
-    ],[have_flac="no"])
-  fi
-fi
-
-if test "$have_flac" != "yes"
-then
-  AC_MSG_ERROR([Could not find libFLAC])
+  CFLAGS="$CFLAGS `pkg-config --cflags libavformat libavcodec libswresample libavutil`"
+  LIBS="$LIBS `pkg-config --libs libavformat libavcodec libswresample libavutil`"
+  ICES_OBJECTS="$ICES_OBJECTS in_ffmpeg.o"
+else
+  AC_MSG_ERROR([FFmpeg libraries were not found (libavformat, libavcodec, libswresample, libavutil).])
 fi
 
 dnl -- and finish up --
@@ -253,6 +174,4 @@ AC_MSG_RESULT([Linking with: $LDFLAGS $LIBS])
 AC_MSG_RESULT([Features:])
 AC_MSG_RESULT([  XML     : $have_xml])
 AC_MSG_RESULT([  LAME    : $have_LAME])
-AC_MSG_RESULT([  Vorbis  : $have_vorbis])
-AC_MSG_RESULT([  MP4     : $have_faad])
-AC_MSG_RESULT([  FLAC    : $have_flac])
+AC_MSG_RESULT([  FFmpeg  : yes])

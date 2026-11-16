@@ -150,7 +150,6 @@ static void ices_setup_parse_defaults(ices_config_t *ices_config) {
 	ices_config->configfile = ices_util_strdup(ICES_DEFAULT_CONFIGFILE);
 	ices_config->base_directory = ices_util_strdup(ICES_DEFAULT_BASE_DIRECTORY);
 	ices_config->verbose = ICES_DEFAULT_VERBOSE;
-	ices_config->reencode = ICES_DEFAULT_REENCODE;
 	ices_config->pm.module = ices_util_strdup(ICES_DEFAULT_MODULE);
 
 	// Allocate the single stream
@@ -176,7 +175,6 @@ void ices_setup_parse_stream_defaults(ices_stream_t* stream) {
 	stream->ispublic = ICES_DEFAULT_ISPUBLIC;
 
 	stream->bitrate = ICES_DEFAULT_BITRATE;
-	stream->reencode = ICES_DEFAULT_REENCODE;
 	stream->out_numchannels = -1;
 	stream->out_samplerate = -1;
 
@@ -257,7 +255,7 @@ static void ices_setup_parse_command_line_for_new_configfile(ices_config_t *ices
 
 	arg = 1;
 
-	// Find -c (only the first letter is checked, so -station is not -c)
+	// Find -c (only the first letter is checked)
 	while (arg < argc) {
 		s = argv[arg];
 
@@ -296,15 +294,6 @@ static void ices_setup_parse_command_line(ices_config_t *ices_config, char **arg
 		s = argv[arg];
 
 		if (s[0] == '-') {
-			// Skip -station (the playlist module reads the name from this command line)
-			if (strcmp(s, "-station") == 0) {
-				if (arg + 1 >= argc) {
-					fprintf(stderr, "Option -station requires an argument!\n");
-					ices_setup_usage();
-					ices_setup_shutdown();
-				}
-				arg++;
-			} else {
 				switch (s[1]) {
 				case 'c':
 					// Skip the config path (the early pass already stored it)
@@ -344,7 +333,6 @@ static void ices_setup_parse_command_line(ices_config_t *ices_config, char **arg
 					ices_setup_shutdown();
 					break;
 				}
-			}
 		}
 		arg++;
 	}
@@ -406,9 +394,8 @@ static void ices_setup_activate_libshout_changes(const ices_config_t *ices_confi
 static void ices_setup_usage(void) {
 	// Show the accepted command line
 	printf("This is ices70 " VERSION "\n"
-	       "ices70 -station <name> -c <configfile> -S script -M <script>\n"
+	       "ices70 -c <configfile> -S script -M <script>\n"
 	       "Options:\n"
-	       "\t-station <name> (ignored here; the playlist script reads it)\n"
 	       "\t-c <configfile>\n"
 	       "\t-S script\n"
 	       "\t-M <playlist script>\n");

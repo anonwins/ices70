@@ -41,7 +41,6 @@ typedef struct ices_stream_St {
 	char* url;
 	int ispublic;
 
-	int reencode;
 	int bitrate;
 	int out_samplerate;
 	int out_numchannels;
@@ -100,7 +99,6 @@ typedef struct _ices_plugin {
 
 typedef struct {
 	int verbose;
-	int reencode;
 	char *configfile;
 	char *base_directory;
 	FILE *logfile;

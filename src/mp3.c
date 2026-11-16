@@ -80,10 +80,6 @@ static char *version_names[3] = { "MPEG-1", "MPEG-2 LSF", "MPEG-2.5" };
 /* -- static prototypes -- */
 static int ices_mp3_parse(input_stream_t* source);
 static ssize_t ices_mp3_read(input_stream_t* self, void* buf, size_t len);
-#ifdef HAVE_LIBLAME
-static ssize_t ices_mp3_readpcm(input_stream_t* self, size_t len,
-				int16_t* left, int16_t* right);
-#endif
 static int ices_mp3_close(input_stream_t* self);
 static int mp3_fill_buffer(input_stream_t* self, size_t len);
 static void mp3_trim_file(input_stream_t* self, mp3_header_t* header);
@@ -228,11 +224,7 @@ int ices_mp3_open(input_stream_t* self, const char* buf, size_t len) {
 	self->data = mp3_data;
 
 	self->read = ices_mp3_read;
-#ifdef HAVE_LIBLAME
-	self->readpcm = ices_mp3_readpcm;
-#else
 	self->readpcm = NULL;
-#endif
 	self->close = ices_mp3_close;
 
 	ices_id3v1_parse(self);
@@ -276,24 +268,6 @@ static ssize_t ices_mp3_read(input_stream_t* self, void* buf, size_t len) {
 
 	return rlen;
 }
-
-#ifdef HAVE_LIBLAME
-static ssize_t ices_mp3_readpcm(input_stream_t* self, size_t len, int16_t* left,
-				int16_t* right) {
-	unsigned char buf[MP3_BUFFER_SIZE];
-	ssize_t rlen;
-	int nsamples = 0;
-
-	while (!nsamples) {
-		if ((rlen = self->read(self, buf, sizeof(buf))) <= 0)
-			return rlen;
-
-		nsamples = ices_reencode_decode(buf, rlen, len, left, right);
-	}
-
-	return nsamples;
-}
-#endif
 
 static int ices_mp3_close(input_stream_t* self) {
 	ices_mp3_in_t* mp3_data = (ices_mp3_in_t*) self->data;

@@ -25,11 +25,24 @@
 #include "definitions.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <unistd.h>
+#include <sys/wait.h>
 
 #define STR_BUFFER 1024
 
 static char *playlist_metadata = NULL;
 static char *cmd = NULL;
+static pid_t child_pid = -1;
+static int read_fd = -1;
+static int write_fd = -1;
+static int asked = 0;
+static char accum[8192];
+static size_t accum_len = 0;
+static char *ready_path = NULL;
 
 extern ices_config_t ices_config;
 
@@ -37,7 +50,9 @@ extern ices_config_t ices_config;
 static char* playlist_script_get_next(void);
 static void playlist_script_shutdown(void);
 static char* playlist_script_get_metadata(void);
-static FILE *ices_pm_script_popen(char *cmd, char *mode);
+static int playlist_script_start(void);
+static void playlist_script_stop(void);
+static int playlist_script_extract(void);
 static char **brk_string(register char *str, int *store_argc);
 
 /* Global function definitions */
@@ -81,194 +96,191 @@ int ices_playlist_script_initialize(playlist_module_t* pm) {
 	pm->get_metadata = playlist_script_get_metadata;
 	pm->shutdown = playlist_script_shutdown;
 
+	// Start the helper once. A dead helper is started again from the stream loop
+	if (!playlist_script_start())
+		return 0;
 	return 1;
 }
 
-static void strclean(char *str) {
-	if (str == NULL) return;
-	/* Remove linefeeds etc. */
-	int i = 0;
-	while (str[i]) {
-		if (str[i] == '\r' || str[i] == '\n') {
-			str[i] = '\0';
-			break;
-		}
-		i++;
+static void playlist_script_stop(void) {
+	if (child_pid > 0) {
+		kill(child_pid, SIGTERM);
+		waitpid(child_pid, NULL, 0);
+	}
+	child_pid = -1;
+	if (read_fd >= 0)
+		close(read_fd);
+	if (write_fd >= 0)
+		close(write_fd);
+	read_fd = -1;
+	write_fd = -1;
+	asked = 0;
+	accum_len = 0;
+	ices_util_free(ready_path);
+	ready_path = NULL;
+}
+
+/* Start the helper and keep both pipes. Stderr stays the station log. */
+static int playlist_script_start(void) {
+	int to_child[2];
+	int from_child[2];
+	pid_t pid;
+	char **execargv;
+	int execargc;
+
+	if (pipe(to_child) < 0 || pipe(from_child) < 0) {
+		ices_log_error("Could not create the playlist pipes");
+		return 0;
+	}
+	pid = fork();
+	if (pid < 0) {
+		ices_log_error("Could not start the playlist helper");
+		return 0;
+	}
+	if (pid == 0) {
+		execargv = brk_string(cmd, &execargc);
+		close(to_child[1]);
+		close(from_child[0]);
+		dup2(to_child[0], STDIN_FILENO);
+		dup2(from_child[1], STDOUT_FILENO);
+		close(to_child[0]);
+		close(from_child[1]);
+		execv(execargv[0], execargv);
+		_exit(127);
 	}
 
+	close(to_child[0]);
+	close(from_child[1]);
+	fcntl(from_child[0], F_SETFL, O_NONBLOCK);
+	child_pid = pid;
+	write_fd = to_child[1];
+	read_fd = from_child[0];
+	asked = 0;
+	accum_len = 0;
+	return 1;
+}
+
+/* Pull two complete lines out of the accumulator. Returns 1 when a path is ready. */
+static int playlist_script_extract(void) {
+	char *first;
+	char *second;
+	size_t path_len;
+	size_t title_len;
+	size_t used;
+
+	first = memchr(accum, '\n', accum_len);
+	if (!first)
+		return 0;
+	second = memchr(first + 1, '\n', accum_len - (size_t)(first + 1 - accum));
+	if (!second)
+		return 0;
+
+	path_len = (size_t)(first - accum);
+	title_len = (size_t)(second - (first + 1));
+	if (path_len > 0 && accum[path_len - 1] == '\r')
+		path_len--;
+	if (title_len > 0 && first[title_len] == '\r')
+		title_len--;
+
+	ready_path = malloc(path_len + 1);
+	if (!ready_path)
+		return 0;
+	memcpy(ready_path, accum, path_len);
+	ready_path[path_len] = '\0';
+
+	ices_util_free(playlist_metadata);
+	playlist_metadata = malloc(title_len + 1);
+	if (playlist_metadata) {
+		memcpy(playlist_metadata, first + 1, title_len);
+		playlist_metadata[title_len] = '\0';
+	}
+
+	used = (size_t)(second + 1 - accum);
+	memmove(accum, second + 1, accum_len - used);
+	accum_len -= used;
+	asked = 0;
+	if (!ready_path[0]) {
+		ices_log_error("Playlist helper returned an empty path");
+		ices_util_free(ready_path);
+		ready_path = NULL;
+		return 0;
+	}
+	return 1;
+}
+
+/* Write one newline when a track is needed and no answer is waiting */
+void ices_playlist_ask(void) {
+	char newline = '\n';
+
+	if (child_pid <= 0 && !playlist_script_start())
+		return;
+	if (asked || ready_path)
+		return;
+	if (write(write_fd, &newline, 1) == 1)
+		asked = 1;
+	else if (errno == EPIPE) {
+		playlist_script_stop();
+		playlist_script_start();
+	}
+}
+
+/* Read whatever the helper has written. 1 = a path is ready, 0 = still waiting, -1 = helper restarted. */
+int ices_playlist_poll(void) {
+	ssize_t got;
+
+	if (ready_path)
+		return 1;
+	if (child_pid <= 0 && !playlist_script_start())
+		return -1;
+
+	got = read(read_fd, accum + accum_len, sizeof(accum) - accum_len - 1);
+	if (got < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+		return playlist_script_extract();
+	if (got < 0)
+		return 0;
+	if (got == 0) {
+		// End of file: the helper died
+		playlist_script_stop();
+		playlist_script_start();
+		return -1;
+	}
+	accum_len += (size_t)got;
+	accum[accum_len] = '\0';
+	return playlist_script_extract();
+}
+
+/* The path from the last ready answer. The caller frees it. */
+char *ices_playlist_take(void) {
+	char *path = ready_path;
+
+	ready_path = NULL;
+	return path;
+}
+
+/* Drop the saved title so silence does not keep the previous song name */
+void ices_playlist_clear_metadata(void) {
+	ices_util_free(playlist_metadata);
+	playlist_metadata = NULL;
 }
 
 static char *playlist_script_get_next(void) {
-	char *filename = NULL, *metadata = NULL, *temp = NULL;
-	FILE *pipe;
-
-	// Ask the script for the next file
-	filename = malloc(STR_BUFFER);
-	metadata = malloc(STR_BUFFER);
-
-	pipe = ices_pm_script_popen(cmd, "r");
-
-	// Ensure the script started
-	if (!pipe) {
-		ices_log_error_output("Couldn't open pipe to program \"%s\"", cmd);
-		return NULL; // The script did not start
-	}
-
-	// Read the path
-	if (fgets(filename, STR_BUFFER, pipe) == NULL) {
-		temp = malloc(STR_BUFFER);
-		ices_log_error_output("Couldn't read filename from pipe to program \"%s\": %s", cmd, ices_util_strerror(errno, temp, STR_BUFFER));
-		free(temp);
-		free(filename); filename = NULL;
-		free(metadata); metadata = NULL;
-		fclose(pipe);
-		return NULL; // The script did not return a path
-	}
-
-	// Read the title (absence is allowed)
-	if (fgets(metadata, STR_BUFFER, pipe) == NULL) {
-		temp = malloc(STR_BUFFER);
-		ices_log_debug("No metadata received from pipe to program \"%s\": %s", cmd, ices_util_strerror(errno, temp, STR_BUFFER));
-		free(temp);
-		free(metadata); metadata = NULL;
-	}
-
-	fclose(pipe);
-
-	// Ensure the path is not a blank line
-	if (filename[0] == '\n' || (filename[0] == '\r' && filename[1] == '\n')) {
-		ices_log_error_output("Got newlines instead of filename from program \"%s\"", cmd);
-		free(filename); filename = NULL;
-		if (metadata)
-			free(metadata);
-		metadata = NULL;
-		return NULL; // The script returned a blank path
-	}
-
-	strclean(filename);
-	strclean(metadata);
-
-	// Ensure the path is absolute or starts with ./
-	if (filename[0] != '/' && !(filename[0] == '.' && filename[1] == '/')) {
-		ices_log_error_output("Playlist script returned something other than a filename; output was:");
-		ices_log_error_output(filename);
-		free(filename); filename = NULL;
-
-		if (metadata) {
-			if (strlen(metadata)) ices_log_error_output(metadata);
-			free(metadata); metadata = NULL;
-		}
-
-		return NULL; // The script output was not a path
-	}
-
-	// Save the title for the metadata update
-	if (playlist_metadata) free(playlist_metadata);
-
-	if (metadata)
-		playlist_metadata = metadata;
-	else
-		playlist_metadata = NULL;
-
-	ices_log_debug("Script playlist handler serving: %s [%s]", ices_util_nullcheck(filename), ices_util_nullcheck(playlist_metadata));
-
-	// Return the path (the caller frees it)
-	return filename;
+	ices_playlist_ask();
+	if (ices_playlist_poll() == 1)
+		return ices_playlist_take();
+	return NULL;
 }
 
-/* Return the file metadata. */
-static char*playlist_script_get_metadata(void) {
+static char *playlist_script_get_metadata(void) {
 	if (playlist_metadata)
 		return playlist_metadata;
 	return NULL;
 }
 
-/* Shutdown the script playlist handler */
 static void playlist_script_shutdown(void) {
-	if (cmd)
-		free(cmd);
-	if (playlist_metadata)
-		free(playlist_metadata);
-}
-
-static FILE *ices_pm_script_popen(char *cmd, char *mode) {
-	pid_t pid;
-
-	#define	PARENT_READ		readpipe[0]
-	#define	CHILD_WRITE		readpipe[1]
-	#define CHILD_READ		writepipe[0]
-	#define PARENT_WRITE	writepipe[1]	
-	
-	int readpipe[2], writepipe[2];
-	
-//	ices_log_debug("executing: %s",cmd);
-	
-	/* setup our pipes */
-	if (pipe(readpipe)) {
-		ices_log_debug("pipe(readpipe) failed");
-		return NULL;
-	}
-	if (pipe(writepipe)) {
-		ices_log_debug("pipe(writepipe) failed");
-		return NULL;
-	}
-	
-	/* fork */
-	if ( (pid = fork()) == -1) {
-		ices_log_debug("unable to fork");
-		return NULL;
-		
-	} else if (pid == 0) {
-		char **execargv;
-		int execargc;
-		
-		execargv = brk_string(cmd,&execargc);
-		//ices_log_debug("Our argv[0] is: %s",execargv[0]);
-
-		/* child process */
-		/* close(ccpipe[1]); */
-		
-		/* close parent ends of the pipes */
-		close(PARENT_WRITE);
-		close(PARENT_READ);
-		
-		/* duplicate and close our descriptors */
-		dup2(CHILD_READ,0);
-		dup2(CHILD_WRITE,1);
-		dup2(CHILD_WRITE,2);
-		
-		close(CHILD_READ);
-		close(CHILD_WRITE);
-		
-		/* create a new session */
-		//setsid();
-
-		execv(execargv[0],execargv);
-		
-		ices_log_debug("execv failed");
-		return NULL;
-	}
-	
-	/* close the child's ends of te pipes */
-	close(CHILD_READ);
-	close(CHILD_WRITE);
-	
-	int rpipe;
-	
-	if (*mode=='r') {
-		close(PARENT_WRITE);
-		rpipe = PARENT_READ;
-	} else if (*mode=='w') {
-		close(PARENT_READ);
-		rpipe = PARENT_WRITE;
-	} else {
-		close(PARENT_WRITE);
-		close(PARENT_READ);
-		
-		return NULL;
-	}
-	
-	return fdopen(rpipe,mode);
+	playlist_script_stop();
+	ices_util_free(cmd);
+	cmd = NULL;
+	ices_playlist_clear_metadata();
 }
 
 /*-

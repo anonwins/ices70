@@ -233,8 +233,10 @@ static void metadata_update(int delay) {
 				snprintf(song, sizeof(song), "%s - %s", Artist, Title);
 			else
 				snprintf(song, sizeof(song), "%s", Title);
-		} else
+		} else if (Filename)
 			snprintf(song, sizeof(song), "%s", Filename);
+		else
+			song[0] = '\0';
 
 		value = song;
 	} else

@@ -1,6 +1,6 @@
 /* reencode.c
  * - Functions for reencoding in ices
- * Copyright (c) 2000 Alexander Hav�ng
+ * Copyright (c) 2000 Alexander Haväng
  * Copyright (c) 2001-3 Brendan Cully
  *
  * This program is free software; you can redistribute it and/or
@@ -29,134 +29,88 @@
 
 extern ices_config_t ices_config;
 
-/* One decoder for the process. LAME's hip handle replaces the old global lame_decode state. */
-static hip_t decode_hip;
+/* Set once encode has produced bytes, so a copied MP3 can drain the encoder first */
+static int encoder_dirty = 0;
 
-/* Global function definitions */
-
-/* Initialize the reencoding engine in ices, initialize
- * the liblame structures and be happy */
+/* Build one LAME encoder per stream from the stream rate, channels, and bitrate */
 void ices_reencode_initialize(void) {
 	ices_stream_t* stream;
 
-	/* are any streams reencoding? */
-	for (stream = ices_config.streams; stream; stream = stream->next)
-		if (stream->reencode) {
-			ices_config.reencode = 1;
-			break;
-		}
-
-	if (!ices_config.reencode)
-		return;
-
 	ices_log_debug("Using LAME version %s", get_lame_version());
-}
 
-/* For each song, reset the liblame engine, otherwise it craps out if
- * the bitrate or sample rate changes */
-void ices_reencode_reset(input_stream_t* source) {
-	ices_stream_t* stream;
-	lame_global_flags* lame;
-
-	if (decode_hip) {
-		if (hip_decode_exit(decode_hip) < 0) {
-			ices_log("LAME: error shutting down decoder");
-			ices_setup_shutdown();
-		}
-		decode_hip = NULL;
-	}
-
-	decode_hip = hip_decode_init();
-	if (!decode_hip) {
-		ices_log("LAME: error initialising decoder");
-		ices_setup_shutdown();
-	}
-
+	// Build the encoder for each stream
 	for (stream = ices_config.streams; stream; stream = stream->next) {
-		if (!stream->reencode)
-			continue;
+		lame_global_flags* lame;
 
-		/* only reset encoder if audio format changes */
-		lame = (lame_global_flags*) stream->encoder_state;
-		if (lame) {
-			if (lame_get_in_samplerate(lame) == source->samplerate)
-				continue;
-
-			lame_close(lame);
-		}
+		// Use the configured rate and channels (the crossfader is built for 44100)
+		if (stream->out_samplerate <= 0)
+			stream->out_samplerate = 44100;
+		if (stream->out_numchannels <= 0)
+			stream->out_numchannels = 2;
 
 		if (!(stream->encoder_state = lame_init())) {
-			ices_log("LAME: error resetting encoder.");
+			ices_log("LAME: error creating encoder.");
 			ices_setup_shutdown();
 		}
-
 		lame = (lame_global_flags*) stream->encoder_state;
-
-		lame_set_in_samplerate(lame, source->samplerate);
-		/* Lame won't reencode mono to stereo for some reason, so we have to
-		 * duplicate left into right by hand. */
-		if (source->channels == 1 && stream->out_numchannels == 1)
-			lame_set_num_channels(lame, source->channels);
-
+		lame_set_in_samplerate(lame, stream->out_samplerate);
+		lame_set_num_channels(lame, stream->out_numchannels);
 		lame_set_brate(lame, stream->bitrate);
 		if (stream->out_numchannels == 1)
 			lame_set_mode(lame, MONO);
-		if (stream->out_samplerate > 0)
-			lame_set_out_samplerate(lame, stream->out_samplerate);
+		lame_set_out_samplerate(lame, stream->out_samplerate);
 		lame_set_original(lame, 0);
-
-		/* lame_init_params isn't more specific about the problem */
 		if (lame_init_params(lame) < 0) {
-			ices_log("LAME: error resetting sample rate.");
+			ices_log("LAME: error setting encoder parameters.");
 			lame_close(lame);
+			stream->encoder_state = NULL;
 			ices_setup_shutdown();
 		}
-
-		/* adjust default stream sample rate to LAME default for lazy reencoding tests */
-		if (stream->out_samplerate <= 0)
-			stream->out_samplerate = lame_get_out_samplerate(lame);
 	}
 }
 
-/* If initialized, shutdown the reencoding engine */
+/* Shut the encoders down */
 void ices_reencode_shutdown(void) {
 	ices_stream_t* stream;
-
-	if (decode_hip) {
-		hip_decode_exit(decode_hip);
-		decode_hip = NULL;
-	}
 
 	for (stream = ices_config.streams; stream; stream = stream->next)
 		if (stream->encoder_state) {
 			lame_close((lame_global_flags*) stream->encoder_state);
 			stream->encoder_state = NULL;
 		}
+	encoder_dirty = 0;
 }
 
-/* decode buffer, of length buflen, into left and right. Stream-independent
- * (do this once per chunk, not per stream). Result is number of samples
- * for ices_reencode_reencode_chunk. */
-int ices_reencode_decode(unsigned char* buf, size_t blen, size_t olen,
-			 int16_t* left, int16_t* right) {
-	return hip_decode(decode_hip, buf, blen, left, right);
-}
-
-/* reencode buff, of len buflen, put max outlen reencoded bytes in outbuf */
+/* Encode one block of PCM. outlen is the size of outbuf. */
 int ices_reencode(ices_stream_t* stream, int nsamples, int16_t* left,
 		  int16_t* right, unsigned char *outbuf, int outlen) {
 	lame_global_flags* lame = (lame_global_flags*) stream->encoder_state;
+	int encoded;
 
-	return lame_encode_buffer(lame, left, right, nsamples, outbuf, outlen);
+	encoded = lame_encode_buffer(lame, left, right, nsamples, outbuf, outlen);
+	if (encoded > 0)
+		encoder_dirty = 1;
+	return encoded;
 }
 
-/* At EOF of each file, flush the liblame buffers and get some extra candy */
-int ices_reencode_flush(ices_stream_t* stream, unsigned char *outbuf,
-			int maxlen) {
+/* Whether a copied MP3 has to drain the encoder before its own frames */
+int ices_reencode_is_dirty(void) {
+	return encoder_dirty;
+}
+
+/* Drain one encoder and prepare it for a later PCM stretch */
+int ices_reencode_flush(ices_stream_t* stream, unsigned char *outbuf, int maxlen) {
 	lame_global_flags* lame = (lame_global_flags*) stream->encoder_state;
 	int rc;
 
-	rc = lame_encode_flush_nogap(lame, outbuf, maxlen);
-
+	if (!lame)
+		return 0;
+	rc = lame_encode_flush(lame, outbuf, maxlen);
+	lame_init_params(lame);
 	return rc;
+}
+
+/* The drained bytes have been sent */
+void ices_reencode_mark_clean(void) {
+	encoder_dirty = 0;
 }

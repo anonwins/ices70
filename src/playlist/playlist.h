@@ -27,6 +27,10 @@ char *ices_playlist_get_next(void);
 char* ices_playlist_get_metadata(void);
 int ices_playlist_initialize(void);
 void ices_playlist_shutdown(void);
+void ices_playlist_ask(void);
+int ices_playlist_poll(void);
+char *ices_playlist_take(void);
+void ices_playlist_clear_metadata(void);
 
 int ices_playlist_script_initialize(playlist_module_t* pm);
 

@@ -126,6 +126,5 @@ double rg_get_track_gain(void);
 #define ICES_DEFAULT_CONFIGFILE "ices70.conf"
 #define ICES_DEFAULT_BASE_DIRECTORY "/tmp"
 #define ICES_DEFAULT_VERBOSE 0
-#define ICES_DEFAULT_REENCODE 0
 
 #endif

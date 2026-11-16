@@ -158,18 +158,7 @@ static void parse_stream_node(xmlDocPtr doc, xmlNsPtr ns, xmlNodePtr cur,
 			stream->bitrate = atoi(ices_xml_read_node(doc, cur));
 		else if (xmlstrcmp(cur->name, "Public") == 0)
 			stream->ispublic = atoi(ices_xml_read_node(doc, cur));
-		else if (xmlstrcmp(cur->name, "Reencode") == 0) {
-			int res = atoi(ices_xml_read_node(doc, cur));
-
-#ifndef HAVE_LIBLAME
-			if (res == 1) {
-				ices_log("Support for reencoding with liblame was not found. You can't reencode this.");
-				ices_setup_shutdown();
-			}
-#endif
-
-			stream->reencode = res;
-		} else if (xmlstrcmp(cur->name, "Samplerate") == 0)
+		else if (xmlstrcmp(cur->name, "Samplerate") == 0)
 			stream->out_samplerate = atoi(ices_xml_read_node(doc, cur));
 		else if (xmlstrcmp(cur->name, "Channels") == 0)
 			stream->out_numchannels = atoi(ices_xml_read_node(doc, cur));
