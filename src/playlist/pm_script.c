@@ -29,7 +29,6 @@
 #define STR_BUFFER 1024
 
 static char *playlist_metadata = NULL;
-static int playlist_track_timelimit = 0;
 static char *cmd = NULL;
 
 extern ices_config_t ices_config;
@@ -38,7 +37,6 @@ extern ices_config_t ices_config;
 static char* playlist_script_get_next(void);
 static void playlist_script_shutdown(void);
 static char* playlist_script_get_metadata(void);
-static int playlist_script_get_timelimit(void);
 static FILE *ices_pm_script_popen(char *cmd, char *mode);
 static char **brk_string(register char *str, int *store_argc);
 
@@ -50,13 +48,14 @@ int ices_playlist_script_initialize(playlist_module_t* pm) {
 
 	ices_log_debug("Initializing script playlist handler...");
 
+	// Ensure a playlist script was configured
 	if (!pm->module) {
 		ices_log_error("No playlist script defined");
-		return 0;
+		return 0; // No playlist script
 	}
-	
+
+	// Resolve the script path (absolute, or next to the ices binary)
 	cmd = pm->module;
-	/* make path relative to ices binary dir */
 	if (cmd[0] != '/' && !(cmd[0] == '.' && (cmd[1] == '/' || (cmd[1] == '.' && cmd[2] == '/')))) {
 	    bindir = ices_util_get_bindir();
 	    ices_log_debug("bindir is %s",bindir);
@@ -71,15 +70,15 @@ int ices_playlist_script_initialize(playlist_module_t* pm) {
    		ices_log_debug("cmd is unmodified as %s",cmd);
 	}
 
+	// Ensure the script path was stored
 	if (!cmd) {
 		ices_log_error_output("Could not allocate memory for playlist path");
-		return 0;
+		return 0; // The script path was not stored
 	}
 
+	// Register the script callbacks
 	pm->get_next = playlist_script_get_next;
 	pm->get_metadata = playlist_script_get_metadata;
-	pm->get_timelimit = playlist_script_get_timelimit;
-	pm->get_lineno = NULL;
 	pm->shutdown = playlist_script_shutdown;
 
 	return 1;
@@ -100,64 +99,56 @@ static void strclean(char *str) {
 }
 
 static char *playlist_script_get_next(void) {
-	char *filename = NULL, *metadata = NULL, *timelimit = NULL, *temp = NULL;
+	char *filename = NULL, *metadata = NULL, *temp = NULL;
 	FILE *pipe;
-	
+
+	// Ask the script for the next file
 	filename = malloc(STR_BUFFER);
 	metadata = malloc(STR_BUFFER);
-	timelimit = malloc(STR_BUFFER);
 
 	pipe = ices_pm_script_popen(cmd, "r");
 
+	// Ensure the script started
 	if (!pipe) {
 		ices_log_error_output("Couldn't open pipe to program \"%s\"", cmd);
-		return NULL;
+		return NULL; // The script did not start
 	}
 
+	// Read the path
 	if (fgets(filename, STR_BUFFER, pipe) == NULL) {
 		temp = malloc(STR_BUFFER);
 		ices_log_error_output("Couldn't read filename from pipe to program \"%s\": %s", cmd, ices_util_strerror(errno, temp, STR_BUFFER));
 		free(temp);
 		free(filename); filename = NULL;
 		free(metadata); metadata = NULL;
-		free(timelimit); timelimit = NULL;
 		fclose(pipe);
-		return NULL;
+		return NULL; // The script did not return a path
 	}
 
+	// Read the title (absence is allowed)
 	if (fgets(metadata, STR_BUFFER, pipe) == NULL) {
-		/* This is non-fatal. */
 		temp = malloc(STR_BUFFER);
 		ices_log_debug("No metadata received from pipe to program \"%s\": %s", cmd, ices_util_strerror(errno, temp, STR_BUFFER));
 		free(temp);
 		free(metadata); metadata = NULL;
 	}
 
-	if (fgets(timelimit, STR_BUFFER, pipe) == NULL) {
-		/* This is non-fatal, and in fact can be totally ignored. */
-		free(timelimit); timelimit = NULL;
-	}
-
 	fclose(pipe);
 
+	// Ensure the path is not a blank line
 	if (filename[0] == '\n' || (filename[0] == '\r' && filename[1] == '\n')) {
 		ices_log_error_output("Got newlines instead of filename from program \"%s\"", cmd);
 		free(filename); filename = NULL;
 		if (metadata)
 			free(metadata);
 		metadata = NULL;
-		if (timelimit)
-			free(timelimit);
-		timelimit = NULL;
-		return NULL;
+		return NULL; // The script returned a blank path
 	}
-	
+
 	strclean(filename);
 	strclean(metadata);
-	strclean(timelimit);
-	
-	/* require absolute paths, or relative paths starting with ./, to ensure that
-	 * we don't end up interpreting garbage output (error messages, etc.) as filenames */
+
+	// Ensure the path is absolute or starts with ./
 	if (filename[0] != '/' && !(filename[0] == '.' && filename[1] == '/')) {
 		ices_log_error_output("Playlist script returned something other than a filename; output was:");
 		ices_log_error_output(filename);
@@ -167,29 +158,21 @@ static char *playlist_script_get_next(void) {
 			if (strlen(metadata)) ices_log_error_output(metadata);
 			free(metadata); metadata = NULL;
 		}
-		if (timelimit) {
-			if (strlen(timelimit)) ices_log_error_output(timelimit);
-			free(timelimit); timelimit = NULL;
-		}
-		
-		return NULL;
+
+		return NULL; // The script output was not a path
 	}
-	
+
+	// Save the title for the metadata update
 	if (playlist_metadata) free(playlist_metadata);
-	
+
 	if (metadata)
 		playlist_metadata = metadata;
 	else
 		playlist_metadata = NULL;
 
-	playlist_track_timelimit = 0;
-	if (timelimit) {
-		playlist_track_timelimit = atoi(timelimit);
-		free(timelimit);
-	}
+	ices_log_debug("Script playlist handler serving: %s [%s]", ices_util_nullcheck(filename), ices_util_nullcheck(playlist_metadata));
 
-	ices_log_debug("Script playlist handler serving: %s [%s] (%i)", ices_util_nullcheck(filename), ices_util_nullcheck(playlist_metadata), playlist_track_timelimit);
-
+	// Return the path (the caller frees it)
 	return filename;
 }
 
@@ -198,10 +181,6 @@ static char*playlist_script_get_metadata(void) {
 	if (playlist_metadata)
 		return playlist_metadata;
 	return NULL;
-}
-
-static int playlist_script_get_timelimit(void) {
-	return playlist_track_timelimit;
 }
 
 /* Shutdown the script playlist handler */

@@ -1,6 +1,6 @@
 /* setup.c
  * - Functions for initialization in ices
- * Copyright (c) 2000 Alexander Hav�ng
+ * Copyright (c) 2000 Alexander Havang
  * Copyright (c) 2002-4 Brendan Cully <brendan@xiph.org>
  *
  * This program is free software; you can redistribute it and/or
@@ -32,9 +32,6 @@ static void ices_setup_parse_command_line(ices_config_t *ices_config, char **arg
 static void ices_setup_parse_command_line_for_new_configfile(ices_config_t *ices_config, char **argv, int argc);
 static void ices_setup_activate_libshout_changes(const ices_config_t *ices_config);
 static void ices_setup_usage(void);
-static void ices_setup_version(void);
-static void ices_setup_update_pidfile(int icespid);
-static void ices_setup_daemonize(void);
 static void ices_free_all(ices_config_t *ices_config);
 
 extern ices_config_t ices_config;
@@ -42,27 +39,23 @@ extern ices_config_t ices_config;
 /* Global function definitions */
 
 /* Top level initialization function for ices.
- * It will parse options, initialize modules,
- * and if requested, become a daemon. */
+ * It will parse options and initialize modules. */
 void ices_setup_initialize(void) {
 	ices_stream_t* stream;
 	ices_plugin_t* plugin;
 
 	shout_init();
 
-	/* Setup signal handlers */
+	// Install the signal handlers
 	ices_signals_setup();
 
-	/* Parse the options in the config file, and the command line */
+	// Read the config file and the command line
 	ices_setup_parse_options(&ices_config);
 
-	if (ices_config.daemon)
-		ices_setup_daemonize();
-
-	/* Open logfiles */
+	// Open the logfile
 	ices_log_initialize();
 
-	/* Initialize the libshout structure */
+	// Create one libshout connection
 	for (stream = ices_config.streams; stream; stream = stream->next) {
 		if (!(stream->conn = shout_new())) {
 			ices_log("Could not create shout interface");
@@ -70,15 +63,17 @@ void ices_setup_initialize(void) {
 		}
 	}
 
+	// Copy the settings onto the libshout connection
 	ices_setup_activate_libshout_changes(&ices_config);
 
-	/* Initialize the playlist handler */
+	// Start the playlist handler
 	ices_playlist_initialize();
 
 #ifdef HAVE_LIBLAME
-	/* Initialize liblame for reeencoding */
+	// Initialize liblame for reencoding
 	ices_reencode_initialize();
 
+	// Start the crossfade plugin when one was configured
 	while (ices_config.plugins && ices_config.plugins->init() < 0)
 		ices_config.plugins = ices_config.plugins->next;
 
@@ -96,39 +91,32 @@ void ices_setup_shutdown(void) {
 	ices_stream_t* stream;
 	ices_plugin_t* plugin;
 
-	/* Tell libshout to disconnect from server */
+	// Disconnect libshout
 	for (stream = ices_config.streams; stream; stream = stream->next)
 		if (stream->conn)
 			shout_close(stream->conn);
 
 #ifdef HAVE_LIBLAME
+	// Shut the crossfade plugin down
 	for (plugin = ices_config.plugins; plugin; plugin = plugin->next)
 		plugin->shutdown();
 
-	/* Order the reencoding engine to shutdown */
+	// Shut the reencoding engine down
 	ices_reencode_shutdown();
 #endif
 
-	/* Tell the playlist module to shutdown and cleanup */
+	// Shut the playlist handler down
 	ices_playlist_shutdown();
 
-	/* Cleanup the cue file (the cue module has no init yet) */
-	ices_cue_shutdown();
-
-	/* Make sure we're not leaving any memory allocated around when
-	 * we exit. This makes it easier to find memory leaks, and
-	 * some systems actually don't clean up that well */
+	// Free the configuration
 	ices_free_all(&ices_config);
 
-	/* Let the log and console know we went down ok */
+	// Report the exit and close the logfile
 	ices_log("Ices Exiting...");
-
-	/* Close logfiles */
 	ices_log_shutdown();
 
 	shout_shutdown();
 
-	/* Down and down we go... */
 	exit(1);
 }
 
@@ -140,53 +128,46 @@ void ices_setup_shutdown(void) {
  * - Configfile settings
  * - Command line options */
 static void ices_setup_parse_options(ices_config_t *ices_config) {
-	/* Get default values for the settings */
+	// Apply the hardcoded defaults
 	ices_setup_parse_defaults(ices_config);
 
-	/* Look for given configfile on the commandline */
+	// Find -c before the config file is read
 	ices_setup_parse_command_line_for_new_configfile(ices_config, ices_util_get_argv(), ices_util_get_argc());
 
 #ifdef HAVE_LIBXML
-	/* Parse the configfile */
+	// Read the config file
 	ices_setup_parse_config_file(ices_config, ices_config->configfile);
 #endif
 
-	/* Parse the commandline */
+	// Apply the command line over the config file
 	ices_setup_parse_command_line(ices_config, ices_util_get_argv(), ices_util_get_argc());
 }
 
 /* Function for placing hardcoded defaults in the
  * options object (ices_config) */
 static void ices_setup_parse_defaults(ices_config_t *ices_config) {
+	// Apply the process defaults
 	ices_config->configfile = ices_util_strdup(ICES_DEFAULT_CONFIGFILE);
-	ices_config->daemon = ICES_DEFAULT_DAEMON;
 	ices_config->base_directory = ices_util_strdup(ICES_DEFAULT_BASE_DIRECTORY);
 	ices_config->verbose = ICES_DEFAULT_VERBOSE;
 	ices_config->reencode = ICES_DEFAULT_REENCODE;
-	ices_config->cuefile = ICES_DEFAULT_CUEFILE;
-
-	ices_config->pm.playlist_file =
-		ices_util_strdup(ICES_DEFAULT_PLAYLIST_FILE);
 	ices_config->pm.module = ices_util_strdup(ICES_DEFAULT_MODULE);
-	ices_config->pm.randomize = ICES_DEFAULT_RANDOMIZE_PLAYLIST;
-	ices_config->pm.playlist_type = ICES_DEFAULT_PLAYLIST_TYPE;
 
+	// Allocate the single stream
 	ices_config->streams = (ices_stream_t*) malloc(sizeof(ices_stream_t));
-
 	ices_setup_parse_stream_defaults(ices_config->streams);
 }
 
 /* Place hardcoded defaults into an ices_stream_t object */
 void ices_setup_parse_stream_defaults(ices_stream_t* stream) {
+	// Apply the stream defaults
 	stream->conn = NULL;
 	stream->host = ices_util_strdup(ICES_DEFAULT_HOST);
 	stream->port = ICES_DEFAULT_PORT;
 	stream->user = ices_util_strdup(ICES_DEFAULT_USER);
 	stream->password = ices_util_strdup(ICES_DEFAULT_PASSWORD);
-	stream->protocol = ICES_DEFAULT_PROTOCOL;
 
 	stream->mount = ices_util_strdup(ICES_DEFAULT_MOUNT);
-	stream->dumpfile = NULL;
 
 	stream->name = ices_util_strdup(ICES_DEFAULT_NAME);
 	stream->genre = ices_util_strdup(ICES_DEFAULT_GENRE);
@@ -207,6 +188,7 @@ void ices_setup_parse_stream_defaults(ices_stream_t* stream) {
 
 /* Frees ices_stream_t data (but not the object itself) */
 static void ices_setup_free_stream(ices_stream_t* stream) {
+	// Free the libshout connection and the stream strings
 	if (stream->conn)
 		shout_free(stream->conn);
 	ices_util_free(stream->host);
@@ -214,7 +196,6 @@ static void ices_setup_free_stream(ices_stream_t* stream) {
 	ices_util_free(stream->password);
 
 	ices_util_free(stream->mount);
-	ices_util_free(stream->dumpfile);
 
 	ices_util_free(stream->name);
 	ices_util_free(stream->genre);
@@ -226,12 +207,12 @@ static void ices_setup_free_stream(ices_stream_t* stream) {
 static void ices_free_all(ices_config_t *ices_config) {
 	ices_stream_t *stream, *next;
 
+	// Free the process strings
 	ices_util_free(ices_config->configfile);
 	ices_util_free(ices_config->base_directory);
-
-	ices_util_free(ices_config->pm.playlist_file);
 	ices_util_free(ices_config->pm.module);
 
+	// Free each stream
 	for (stream = ices_config->streams; stream; stream = next) {
 		next = stream->next;
 
@@ -247,6 +228,7 @@ static void ices_setup_parse_config_file(ices_config_t *ices_config, const char 
 	const char *realname = NULL;
 	int ret;
 
+	// Find the config file (the given path, or the same name under the system directory)
 	if (ices_util_verify_file(configfile))
 		realname = configfile;
 	else {
@@ -255,14 +237,13 @@ static void ices_setup_parse_config_file(ices_config_t *ices_config, const char 
 			realname = &namespace[0];
 	}
 
+	// Read the file when it exists
 	if (realname) {
 		ret = ices_xml_parse_config_file(ices_config, realname);
 
 		if (ret == -1)
-			/* ret == -1 means we have no libxml support */
 			ices_log_debug("%s", ices_log_get_error());
 		else if (ret == 0)
-			/* A real error */
 			ices_log("%s", ices_log_get_error());
 	}
 }
@@ -276,12 +257,18 @@ static void ices_setup_parse_command_line_for_new_configfile(ices_config_t *ices
 
 	arg = 1;
 
+	// Find -c (only the first letter is checked, so -station is not -c)
 	while (arg < argc) {
 		s = argv[arg];
 
 		if (s[0] == '-') {
 			switch (s[1]) {
 			case 'c':
+				// Ensure -c has a path
+				if (arg + 1 >= argc) {
+					fprintf(stderr, "Option c requires an argument!\n");
+					ices_setup_shutdown();
+				}
 				arg++;
 				if (ices_config->configfile)
 					ices_util_free(ices_config->configfile);
@@ -302,10 +289,6 @@ static void ices_setup_parse_command_line(ices_config_t *ices_config, char **arg
 					  int argc) {
 	int arg;
 	char *s;
-	ices_stream_t* stream = ices_config->streams;
-	/* each -m option creates a new stream, subsequent options are applied
-	 * to it. */
-	int nstreams = 1;
 
 	arg = 1;
 
@@ -313,157 +296,54 @@ static void ices_setup_parse_command_line(ices_config_t *ices_config, char **arg
 		s = argv[arg];
 
 		if (s[0] == '-') {
-			if ((strchr("BRrsVvQ", s[1]) == NULL) && arg >= (argc - 1)) {
-				fprintf(stderr, "Option %c requires an argument!\n", s[1]);
-				ices_setup_usage();
-				ices_setup_shutdown();
-				return;
-			}
-
-			switch (s[1]) {
-			case 'B':
-				ices_config->daemon = 1;
-				break;
-			case 'b':
-				arg++;
-				stream->bitrate = atoi(argv[arg]);
-				break;
-			case 'C':
-				arg++;
-				if (atoi(argv[arg]) > 0)
-					/* TODO: stack plugins */
-					ices_config->plugins = crossfade_plugin(atoi(argv[arg]));
-			case 'c':
-				arg++;
-				break;
-			case 'd':
-				arg++;
-				ices_util_free(stream->description);
-				stream->description = ices_util_strdup(argv[arg]);
-				break;
-			case 'D':
-				arg++;
-				ices_util_free(ices_config->base_directory);
-				ices_config->base_directory = ices_util_strdup(argv[arg]);
-				break;
-			case 'F':
-				arg++;
-				ices_util_free(ices_config->pm.playlist_file);
-				ices_config->pm.playlist_file = ices_util_strdup(argv[arg]);
-				break;
-			case 'f':
-				arg++;
-				ices_util_free(stream->dumpfile);
-				stream->dumpfile = ices_util_strdup(argv[arg]);
-				break;
-			case 'g':
-				arg++;
-				ices_util_free(stream->genre);
-				stream->genre = ices_util_strdup(argv[arg]);
-				break;
-			case 'h':
-				arg++;
-				ices_util_free(stream->host);
-				stream->host = ices_util_strdup(argv[arg]);
-				break;
-			case 'H':
-				arg++;
-				stream->out_samplerate = atoi(argv[arg]);
-				break;
-			case 'M':
-				arg++;
-				ices_util_free(ices_config->pm.module);
-				ices_config->pm.module = ices_util_strdup(argv[arg]);
-				break;
-			case 'm':
-				arg++;
-				if (nstreams > 1) {
-					stream->next =
-						(ices_stream_t*) malloc(sizeof(ices_stream_t));
-					stream = stream->next;
-					ices_setup_parse_stream_defaults(stream);
-				}
-				ices_util_free(stream->mount);
-				stream->mount = ices_util_strdup(argv[arg]);
-				nstreams++;
-				break;
-			case 'N':
-				arg++;
-				stream->out_numchannels = atoi(argv[arg]);
-				break;
-			case 'n':
-				arg++;
-				ices_util_free(stream->name);
-				stream->name = ices_util_strdup(argv[arg]);
-				break;
-			case 'P':
-				arg++;
-				ices_util_free(stream->password);
-				stream->password = ices_util_strdup(argv[arg]);
-				break;
-			case 'p':
-				arg++;
-				stream->port = atoi(argv[arg]);
-				break;
-			case 'Q':
-				ices_config->cuefile = 1;
-				break;
-			case 'R':
-#ifdef HAVE_LIBLAME
-				stream->reencode = 1;
-#else
-				fprintf(stderr, "This ices wasn't compiled with reencoding support\n");
-				ices_setup_shutdown();
-#endif
-				break;
-			case 'r':
-				ices_config->pm.randomize = 1;
-				break;
-			case 'S':
-				arg++;
-				if (strcmp(argv[arg], "python") == 0)
-					ices_config->pm.playlist_type = ices_playlist_python_e;
-				else if (strcmp(argv[arg], "perl") == 0)
-					ices_config->pm.playlist_type = ices_playlist_perl_e;
-				else if (strcmp(argv[arg], "script") == 0)
-					ices_config->pm.playlist_type = ices_playlist_script_e;
-				else
-					ices_config->pm.playlist_type = ices_playlist_builtin_e;
-				break;
-			case 's':
-				stream->ispublic = 0;
-				break;
-			case 't':
-				arg++;
-				if (!strcmp(argv[arg], "http"))
-					stream->protocol = http_protocol_e;
-				else if (!strcmp(argv[arg], "xaudiocast"))
-					stream->protocol = xaudiocast_protocol_e;
-				else if (!strcmp(argv[arg], "icy"))
-					stream->protocol = icy_protocol_e;
-				else {
-					fprintf(stderr, "Unknown protocol %s. Use 'http', 'xaudiocast' or 'icy'.\n", argv[arg]);
+			// Skip -station (the playlist module reads the name from this command line)
+			if (strcmp(s, "-station") == 0) {
+				if (arg + 1 >= argc) {
+					fprintf(stderr, "Option -station requires an argument!\n");
+					ices_setup_usage();
 					ices_setup_shutdown();
 				}
-				break;
-			case 'U':
 				arg++;
-				ices_util_free(stream->user);
-				stream->user = ices_util_strdup(argv[arg]);
-			case 'u':
-				arg++;
-				ices_util_free(stream->url);
-				stream->url = ices_util_strdup(argv[arg]);
-				break;
-			case 'V':
-				ices_setup_version();
-				exit(0);
-			case 'v':
-				ices_config->verbose = 1;
-				break;
-			default:
-				ices_setup_usage();
-				break;
+			} else {
+				switch (s[1]) {
+				case 'c':
+					// Skip the config path (the early pass already stored it)
+					if (arg + 1 >= argc) {
+						fprintf(stderr, "Option c requires an argument!\n");
+						ices_setup_usage();
+						ices_setup_shutdown();
+					}
+					arg++;
+					break;
+				case 'M':
+					// Save the playlist script path
+					if (arg + 1 >= argc) {
+						fprintf(stderr, "Option M requires an argument!\n");
+						ices_setup_usage();
+						ices_setup_shutdown();
+					}
+					arg++;
+					ices_util_free(ices_config->pm.module);
+					ices_config->pm.module = ices_util_strdup(argv[arg]);
+					break;
+				case 'S':
+					// Ensure the playlist type is script
+					if (arg + 1 >= argc) {
+						fprintf(stderr, "Option S requires an argument!\n");
+						ices_setup_usage();
+						ices_setup_shutdown();
+					}
+					arg++;
+					if (strcmp(argv[arg], "script") != 0) {
+						fprintf(stderr, "Playlist type must be script.\n");
+						ices_setup_shutdown();
+					}
+					break;
+				default:
+					ices_setup_usage();
+					ices_setup_shutdown();
+					break;
+				}
 			}
 		}
 		arg++;
@@ -479,9 +359,11 @@ static void ices_setup_activate_libshout_changes(const ices_config_t *ices_confi
 	char useragent[64];
 	char bitrate[8];
 
+	// Build the source agent string
 	snprintf(useragent, sizeof(useragent), "ices/" VERSION " libshout/%s",
 		 shout_version(NULL, NULL, NULL));
 
+	// Copy each stream onto its libshout connection
 	for (stream = ices_config->streams; stream; stream = stream->next) {
 		conn = stream->conn;
 
@@ -490,12 +372,7 @@ static void ices_setup_activate_libshout_changes(const ices_config_t *ices_confi
 		shout_set_user(conn, stream->user);
 		shout_set_password(conn, stream->password);
 		shout_set_content_format(conn, SHOUT_FORMAT_MP3, SHOUT_USAGE_AUDIO, NULL);
-		if (stream->protocol == icy_protocol_e)
-			shout_set_protocol(conn, SHOUT_PROTOCOL_ICY);
-		else if (stream->protocol == http_protocol_e)
-			shout_set_protocol(conn, SHOUT_PROTOCOL_HTTP);
-		else
-			shout_set_protocol(conn, SHOUT_PROTOCOL_XAUDIOCAST);
+		shout_set_protocol(conn, SHOUT_PROTOCOL_HTTP);
 		shout_set_meta(conn, SHOUT_META_NAME, stream->name);
 		shout_set_meta(conn, SHOUT_META_URL, stream->url);
 		shout_set_meta(conn, SHOUT_META_GENRE, stream->genre);
@@ -510,10 +387,8 @@ static void ices_setup_activate_libshout_changes(const ices_config_t *ices_confi
 
 		ices_log_debug("Sending following information to libshout:");
 		ices_log_debug("Stream: %d", streamno);
-		ices_log_debug("Host: %s:%d (protocol: %s)", shout_get_host(conn),
-			       shout_get_port(conn),
-			       stream->protocol == icy_protocol_e ? "icy" :
-			       stream->protocol == http_protocol_e ? "http" : "xaudiocast");
+		ices_log_debug("Host: %s:%d (protocol: http)", shout_get_host(conn),
+			       shout_get_port(conn));
 		ices_log_debug("Mount: %s, User: %s, Password: %s", shout_get_mount(conn), shout_get_user(conn), shout_get_password(conn));
 		ices_log_debug("Name: %s\tURL: %s",
 			       shout_get_meta(conn, SHOUT_META_NAME),
@@ -523,119 +398,18 @@ static void ices_setup_activate_libshout_changes(const ices_config_t *ices_confi
 			       shout_get_meta(conn, SHOUT_META_DESCRIPTION));
 		ices_log_debug("Bitrate: %s\tPublic: %d", shout_get_audio_info(conn, SHOUT_AI_BITRATE),
 			       shout_get_public(conn));
-		/* Current libshout applies a dump file only for obsolete xaudiocast */
-		ices_log_debug("Dump file: %s", ices_util_nullcheck(stream->dumpfile));
 		streamno++;
 	}
 }
 
-/* Display all command line options for ices */
+/* Display the command line options ICING uses */
 static void ices_setup_usage(void) {
+	// Show the accepted command line
 	printf("This is ices " VERSION "\n"
-	       "ices <options>\n"
+	       "ices -station <name> -c <configfile> -S script -M <script>\n"
 	       "Options:\n"
-	       "\t-B (Background (daemon mode))\n"
-	       "\t-b <stream bitrate>\n"
-	       "\t-C <crossfade seconds>\n");
-	printf("\t-c <configfile>\n");
-	printf("\t-D <base directory>\n");
-	printf("\t-d <stream description>\n");
-	printf("\t-f <dumpfile on server>\n");
-	printf("\t-F <playlist>\n");
-	printf("\t-g <stream genre>\n");
-	printf("\t-h <host>\n");
-	printf("\t-M <interpreter module>\n");
-	printf("\t-m <mountpoint>\n");
-	printf("\t-n <stream name>\n");
-	printf("\t-p <port>\n");
-	printf("\t-P <password>\n");
-	printf("\t-Q (activate cue file)\n");
-	printf("\t-R (activate reencoding)\n");
-	printf("\t-r (randomize playlist)\n");
-	printf("\t-s (private stream)\n");
-	printf("\t-S <script|perl|python|builtin>\n");
-	printf("\t-t <http|xaudiocast|icy>\n");
-	printf("\t-u <stream url>\n");
-	printf("\t-U <user>\n");
-	printf("\t-V (display version number)\n");
-	printf("\t-v (verbose output)\n");
-	printf("\t-H <reencoded sample rate>\n");
-	printf("\t-N <reencoded number of channels>\n");
+	       "\t-station <name> (ignored here; the playlist script reads it)\n"
+	       "\t-c <configfile>\n"
+	       "\t-S script\n"
+	       "\t-M <playlist script>\n");
 }
-
-/* display version information */
-static void ices_setup_version(void) {
-	printf("ices " VERSION "\nFeatures: "
-#ifdef HAVE_LIBLAME
-	       "LAME "
-#endif
-#ifdef HAVE_LIBPERL
-	       "Perl "
-#endif
-#ifdef HAVE_LIBPYTHON
-	       "python "
-#endif
-#ifdef HAVE_LIBXML
-	       "libxml "
-#endif
-#ifdef HAVE_LIBVORBISFILE
-	       "Vorbis "
-#endif
-#ifdef HAVE_LIBFLAC
-	       "FLAC "
-#endif
-#ifdef HAVE_LIBFAAD
-	       "MP4"
-#endif
-	       "\n"
-	       "System configuration file: " ICES_ETCDIR "/ices.conf\n"
-#if defined (HAVE_LIBPERL) || defined (HAVE_LIBPYTHON)
-	       "Playlist module directory: " ICES_MODULEDIR "\n"
-#endif
-	       );
-}
-
-/* Put ices in the background, as a daemon */
-static void ices_setup_daemonize(void) {
-	int icespid = fork();
-
-	if (icespid == -1) {
-		ices_log("ERROR: Cannot fork(), that means no daemon, sorry!");
-		return;
-	}
-
-	if (icespid != 0) {
-		/* Update the pidfile (so external applications know what pid
-		   ices is running with. */
-		printf("Into the land of the dreaded daemons we go... (pid: %d)\n", icespid);
-		ices_setup_shutdown();
-	}
-#ifdef HAVE_SETSID
-	setsid();
-#endif
-
-	ices_log_daemonize();
-	ices_setup_update_pidfile(getpid());
-}
-
-/* Update a file called ices.pid with the given process id */
-static void ices_setup_update_pidfile(int icespid) {
-	char buf[1024];
-	FILE* pidfd;
-
-	if (!ices_config.base_directory) {
-		ices_log_error("Base directory is invalid");
-		return;
-	}
-
-	snprintf(buf, sizeof(buf), "%s/ices.pid", ices_config.base_directory);
-
-	pidfd = ices_util_fopen_for_writing(buf);
-
-	if (pidfd) {
-		fprintf(pidfd, "%d", icespid);
-		ices_util_fclose(pidfd);
-	}
-}
-
-

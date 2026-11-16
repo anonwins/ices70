@@ -13,7 +13,7 @@ AC_CONFIG_MACRO_DIRS([m4])
 AC_CONFIG_SRCDIR([src/ices.c])
 
 AC_CONFIG_FILES([Makefile src/Makefile src/playlist/Makefile conf/Makefile
- conf/ices.conf.dist doc/Makefile])
+ conf/ices.conf.dist])
 
 VERSION=ICES_VERSION
 
@@ -74,22 +74,6 @@ AC_CONFIG_HEADERS([config.h])
 LT_INIT
 AC_SUBST(LIBTOOL_DEPS)
 
-AC_ARG_WITH(docdir,
-  [[  --with-docdir=DIR       put documentation in DIR [PREFIX/doc/ices]]],
-  [ices_cv_docdir="$with_docdir"],
-  [ices_cv_docdir='${prefix}/doc/ices'])
-
-docdir="$ices_cv_docdir"
-AC_SUBST(docdir)
-
-AC_ARG_WITH(moddir,
-  [[  --with-moddir=DIR       put playlist modules in DIR [SYSCONFDIR/modules]]],
-  [ices_cv_moddir="$with_moddir"],
-  [ices_cv_moddir='${sysconfdir}/modules'])
-
-moddir="$ices_cv_moddir"
-AC_SUBST(moddir)
-
 dnl -- Required extra libraries --
 
 XIPH_PATH_SHOUT(, [AC_MSG_ERROR([Could not find a usable libshout])])
@@ -124,85 +108,13 @@ then
     ICES_OBJECTS="$ICES_OBJECTS ices_config.o"
     have_xml="yes"
   else
-    AC_MSG_RESULT([Compiling without libxml support - no configfiles])
-  fi
-fi
-AM_CONDITIONAL(USE_XML, test "$have_xml" = "yes")
-
-AC_ARG_WITH([python],
-  [[  --with-python[=PATH]    include python scripting support]],
-  [enable_python="$with_python"],
-  [enable_python="yes"])
-
-have_python="no"
-if test "$enable_python" != "no"
-then
-  XIPH_PATH_PYTHON([$enable_python])
-  if test -n "$PYTHON_LIBS"
-  then
-    have_python="yes"
-    CPPFLAGS="$CPPFLAGS $PYTHON_CPPFLAGS"
-    LDFLAGS="$LDFLAGS $PYTHON_LDFLAGS"
-    LIBS="$LIBS $PYTHON_LIBS"
-    PLAYLIST_OBJECTS="$PLAYLIST_OBJECTS pm_python.o"
-    AC_DEFINE(HAVE_LIBPYTHON, 1, [Define if you have the python library])
+    AC_MSG_ERROR([libxml2 is required])
   fi
 fi
 
-if test "$with_python" != "no" -a "$have_python" != "yes"
+if test "$have_xml" != "yes"
 then
-  if test -n "$with_python"
-  then
-    AC_MSG_ERROR([Could not link to python])
-  else
-    AC_MSG_RESULT([Could not link to python, python scripting disabled])
-  fi
-fi
-
-AC_ARG_WITH(perl,
-  [[  --with-perl[=PATH]      include perl scripting support]])
-
-have_perl="no"
-PERL=perl
-if test "$with_perl" != "no"
-then
-  if test -n "$with_perl" -a "$with_perl" != "yes"
-  then
-    PERL="$with_perl"
-    if ! test -x "$PERL"
-    then
-      AC_MSG_ERROR([Perl not found in the specified location])
-    fi
-  fi
-
-  PERLCFLAGS=`$PERL -MExtUtils::Embed -e ccopts`
-  PERLLIBS=`$PERL -MExtUtils::Embed -e ldopts`
-
-  saved_CPPFLAGS="$CPPFLAGS"
-  saved_LIBS="$LIBS"
-  CPPFLAGS="$CPPFLAGS $PERLCFLAGS"
-  LIBS="$LIBS $PERLLIBS"
-
-  AC_CHECK_FUNCS(perl_construct)
-  if test "$ac_cv_func_perl_construct" != "no"
-  then
-    have_perl="yes"
-    PLAYLIST_OBJECTS="$PLAYLIST_OBJECTS pm_perl.o"
-    AC_DEFINE(HAVE_LIBPERL, 1, [Define if you have perl libraries])
-  else
-    CPPFLAGS="$saved_CPPFLAGS"
-    LIBS="$saved_LIBS"
-  fi
-fi
-
-if test "$with_perl" != "no" -a "$have_perl" != "yes"
-then
-  if test -n "$with_perl"
-  then
-    AC_MSG_ERROR([Could not link to perl])
-  else
-    AC_MSG_RESULT([Could not link to perl, perl scripting disabled])
-  fi
+  AC_MSG_ERROR([libxml2 is required])
 fi
 
 AC_ARG_WITH(lame,
@@ -238,30 +150,13 @@ then
   fi
 fi
 
-if test "$with_lame" != "no" -a "$have_LAME" != "yes"
+if test "$have_LAME" != "yes"
 then
-  if test -n "$with_lame"
-  then
-    AC_MSG_ERROR([Could not find a valid LAME library installation])
-  else
-    AC_MSG_RESULT([Could not find a valid LAME library, reencoding disabled])
-  fi
+  AC_MSG_ERROR([Could not find a valid LAME library installation])
 fi
 
 AC_ARG_WITH(vorbis,
   [[  --with-vorbis[=DIR]     support for vorbis transcoding using libvorbisfile [in DIR]]])
-
-if test "$have_LAME" != "yes"
-then
-  if test -n "$with_vorbis" -a "$with_vorbis" != "no"
-  then
-    AC_MSG_ERROR([Vorbis cannot be enabled without LAME])
-  elif test "$with_vorbis" != "no"
-  then
-    AC_MSG_RESULT([Vorbis is disabled because LAME is not enabled])
-    with_vorbis="no"
-  fi
-fi
 
 have_vorbis="no"
 if test "$with_vorbis" != "no"
@@ -284,14 +179,9 @@ then
   fi
 fi
 
-if test "$with_vorbis" != "no" -a "$have_vorbis" != "yes"
+if test "$have_vorbis" != "yes"
 then
-  if test -n "$with_vorbis"
-  then
-    AC_MSG_ERROR([Could not find libvorbisfile])
-  else
-    AC_MSG_RESULT([Could not find libvorbisfile, vorbis support disabled])
-  fi
+  AC_MSG_ERROR([Could not find libvorbisfile])
 fi
 
 AC_ARG_WITH(faad,
@@ -326,18 +216,6 @@ fi
 AC_ARG_WITH(flac,
   [[  --with-flac[=DIR]     support for FLAC transcoding using libFLAC [in DIR]]])
 
-if test "$have_LAME" != "yes"
-then
-  if test -n "$with_flac" -a "$with_flac" != "no"
-  then
-    AC_MSG_ERROR([FLAC transcoding cannot be enabled without LAME])
-  elif test "$with_flac" != "no"
-  then
-    AC_MSG_RESULT([FLAC transcoding is disabled because LAME is not enabled])
-    with_flac="no"
-  fi
-fi
-
 have_flac="no"
 if test "$with_flac" != "no"
 then
@@ -359,21 +237,15 @@ then
   fi
 fi
 
-if test "$with_flac" != "no" -a "$have_flac" != "yes"
+if test "$have_flac" != "yes"
 then
-  if test -n "$with_flac"
-  then
-    AC_MSG_ERROR([Could not find libFLAC])
-  else
-    AC_MSG_RESULT([Could not find libFLAC, FLAC transcoding disabled])
-  fi
+  AC_MSG_ERROR([Could not find libFLAC])
 fi
 
 dnl -- and finish up --
 
 LIBS="$LIBS $LIBM $LIBDL"
 AC_SUBST(ICES_OBJECTS)
-AC_SUBST(PLAYLIST_OBJECTS)
 
 AC_OUTPUT
 
@@ -381,8 +253,6 @@ AC_MSG_RESULT([Compiling with: $CPPFLAGS $CFLAGS])
 AC_MSG_RESULT([Linking with: $LDFLAGS $LIBS])
 AC_MSG_RESULT([Features:])
 AC_MSG_RESULT([  XML     : $have_xml])
-AC_MSG_RESULT([  Python  : $have_python])
-AC_MSG_RESULT([  Perl    : $have_perl])
 AC_MSG_RESULT([  LAME    : $have_LAME])
 AC_MSG_RESULT([  Vorbis  : $have_vorbis])
 AC_MSG_RESULT([  MP4     : $have_faad])

@@ -39,27 +39,26 @@
 /* Private function declarations */
 static void signals_child(int sig);
 static void signals_int(int sig);
-static void signals_hup(int sig);
 static void signals_usr1(int sig);
 
 /* Global function definitions */
 
 /* Setup signal handlers for some signals that we don't want
  * delivered to icecast, and some that we want to handle in
- * a certain way, like SIGINT to cleanup and exit, and hup
- * to close and reopen logfiles */
+ * a certain way, like SIGINT to cleanup and exit */
 void ices_signals_setup(void) {
 #ifndef _WIN32
 	struct sigaction sa;
 
+	// Ignore signals that must not kill the process
 	sigemptyset(&sa.sa_mask);
 	sa.sa_flags = 0;
-
 	sa.sa_handler = SIG_IGN;
 	sigaction(SIGPIPE, &sa, NULL);
 	sigaction(SIGIO, &sa, NULL);
 	sigaction(SIGALRM, &sa, NULL);
 
+	// Shut down on interrupt or terminate
 	sa.sa_handler = signals_int;
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGTERM, &sa, NULL);
@@ -67,12 +66,11 @@ void ices_signals_setup(void) {
 #ifdef SA_RESTART
 	sa.sa_flags = SA_RESTART;
 #endif
+	// Reap the playlist script after it exits
 	sa.sa_handler = signals_child;
 	sigaction(SIGCHLD, &sa, NULL);
 
-	sa.sa_handler = signals_hup;
-	sigaction(SIGHUP, &sa, NULL);
-
+	// Skip to the next track on SIGUSR1
 	sa.sa_handler = signals_usr1;
 	sigaction(SIGUSR1, &sa, NULL);
 }
@@ -89,17 +87,9 @@ static void signals_int(int sig) {
 	ices_setup_shutdown();
 }
 
-/* SIGHUP caught, let's cycle logfiles and try to reload the playlist module */
-static void signals_hup(int sig) {
-	ices_log_debug("Caught SIGHUP, cycling logfiles and reloading playlist...");
-	ices_log_reopen_logfile();
-	ices_playlist_reload();
-}
-
 /* I'm not sure whether I'll keep this... */
 static void signals_usr1(int sig) {
 	ices_log_debug("Caught SIGUSR1, skipping to next track...");
 	ices_stream_next();
 #endif
 }
-

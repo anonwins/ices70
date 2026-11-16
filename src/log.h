@@ -24,10 +24,8 @@ void ices_log_error(const char *fmt, ...);
 void ices_log_debug(const char *fmt, ...);
 void ices_log_error_output(const char *fmt, ...);
 char *ices_log_get_error(void);
-int ices_log_reopen_logfile(void);
 void ices_log_initialize(void);
 void ices_log_shutdown(void);
-void ices_log_daemonize(void);
 
 
 

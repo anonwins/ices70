@@ -44,27 +44,6 @@ void ices_log_shutdown(void) {
 		ices_log("%s", ices_log_get_error());
 }
 
-/* Close everything, start up with clean slate when
- * run as a daemon */
-void ices_log_daemonize(void) {
-	close(0);
-	close(1);
-	close(2);
-
-	if (!freopen("/dev/null", "r", stdin)
-	    || !freopen("/dev/null", "w", stdout)
-	    || !freopen("/dev/null", "w", stderr))
-		exit(1);
-
-	ices_log_reopen_logfile();
-}
-
-/* Cycle the logfile, usually called from the SIGHUP handler */
-int ices_log_reopen_logfile(void) {
-	ices_log_close_logfile();
-	return ices_log_open_logfile();
-}
-
 /* Log only if verbose mode is set. Prepend output with DEBUG:  */
 void ices_log_debug(const char *fmt, ...) {
 	char buff[BUFSIZE];
@@ -139,8 +118,9 @@ char *ices_log_get_error(void) {
 
 /* Private function definitions */
 
-/* Function to log string to both console and file */
+/* Write one line to the logfile and to stdout */
 static void ices_log_string(char *format, char *string) {
+	// Write the line to the logfile
 	if (ices_config.logfile) {
 		fprintf(ices_config.logfile, format, string);
 #ifndef HAVE_SETLINEBUF
@@ -148,9 +128,8 @@ static void ices_log_string(char *format, char *string) {
 #endif
 	}
 
-	/* Don't log to console when daemonized */
-	if (!ices_config.daemon)
-		fprintf(stdout, format, string);
+	// Write the same line to stdout
+	fprintf(stdout, format, string);
 }
 
 /* Open the ices logfile, create it if needed */

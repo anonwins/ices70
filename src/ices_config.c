@@ -1,6 +1,6 @@
 /* parse.c
  * - Functions for xml file parsing
- * Copyright (c) 2000 Alexander Haväng
+ * Copyright (c) 2000 Alexander Havang
  * Copyright (c) 2001-4 Brendan Cully
  *
  * This program is free software; you can redistribute it and/or
@@ -43,58 +43,54 @@ static char* ices_xml_read_node(xmlDocPtr doc, xmlNodePtr node);
 int ices_xml_parse_config_file(ices_config_t *ices_config, const char *configfile) {
 	char namespace[1024];
 
+	// Ensure the config file can be opened
 	if (!ices_util_verify_file(configfile)) {
 		ices_log_error("XML Parser Error: Could not open configfile. [%s]  Error: [%s]", configfile, ices_util_strerror(errno, namespace, 1024));
-		return 0;
+		return 0; // The config file did not open
 	}
 
-	/* Setup the parser options */
+	// Parse the file
 	LIBXML_TEST_VERSION
 	xmlKeepBlanksDefault(0);
-
-	/* Parse the file and be happy */
 	return parse_file(configfile, ices_config);
 }
 
-/* I hope you can tell this is my first try at xml and libxml :)  */
+/* Parse the configuration document */
 static int parse_file(const char *configfile, ices_config_t *ices_config) {
 	xmlDocPtr doc;
 	xmlNsPtr ns;
 	xmlNodePtr cur;
-
-	/* we support multiple stream nodes */
 	int nstreams = 0;
 	ices_stream_t* stream = ices_config->streams;
 
-	/* This does the actual parsing */
+	// Parse the document
 	if (!(doc = xmlParseFile(configfile))) {
 		ices_log_error("XML Parser: Error while parsing %s", configfile);
-		return 0;
+		return 0; // The document did not parse
 	}
 
-	/* Gimme the root element dammit! */
+	// Get the root element
 	if (!(cur = xmlDocGetRootElement(doc))) {
 		ices_log_error("XML Parser: Empty documenent %s", configfile);
 		xmlFreeDoc(doc);
-		return 0;
+		return 0; // The document was empty
 	}
 
-	/* Verify that the document is of the right type in the right namespace */
+	// Ensure the ices namespace is present
 	if (!(ns = xmlSearchNsByHref(doc, cur, (unsigned char *) "http://www.icecast.org/projects/ices"))) {
 		ices_log_error("XML Parser: Document of invalid type, no ices namespace found");
 		xmlFreeDoc(doc);
-		return 0;
+		return 0; // The ices namespace was missing
 	}
 
-	/* First element should be configuration */
+	// Ensure the root is Configuration
 	if (!cur->name || (xmlstrcmp(cur->name, "Configuration"))) {
 		ices_log_error("XML Parser: Document of invalid type, root node is not 'Configuration'");
 		xmlFreeDoc(doc);
-		return 0;
+		return 0; // The root was not Configuration
 	}
 
-	/* Get the configuration tree */
-	/* Tree traversal */
+	// Walk the top-level nodes
 	cur = cur->xmlChildrenNode;
 
 #ifdef HAVE_LIBXML_PARSER_H
@@ -104,27 +100,22 @@ static int parse_file(const char *configfile, ices_config_t *ices_config) {
 #endif
 
 	if (cur == NULL) {
-		/* Right type of document, but no configuration, guess that is ok */
 		xmlFreeDoc(doc);
-		return 1;
+		return 1; // The document had no configuration
 	}
 
-	/* Separate the parsing into different submodules,
-	 * Server, Stream, Playlist and Execution */
 	for (; cur != NULL; cur = cur->next) {
 		if (cur->type == XML_COMMENT_NODE)
-			continue;
+			continue; // Skip comment: It is not a setting
 		if (xmlstrcmp(cur->name, "Stream") == 0) {
-			/* first stream is preallocated */
+			// Ensure this is the only stream
 			if (nstreams) {
-				stream->next = (ices_stream_t*) malloc(sizeof(ices_stream_t));
-				stream = stream->next;
-				/* in case fields are omitted in the config file */
-				ices_setup_parse_stream_defaults(stream);
+				ices_log("Only one Stream is supported");
+				xmlFreeDoc(doc);
+				ices_setup_shutdown();
 			}
 
 			parse_stream_node(doc, ns, cur->xmlChildrenNode, stream);
-
 			nstreams++;
 		} else if (xmlstrcmp(cur->name, "Playlist") == 0)
 			parse_playlist_node(doc, ns, cur->xmlChildrenNode, ices_config);
@@ -134,7 +125,7 @@ static int parse_file(const char *configfile, ices_config_t *ices_config) {
 			ices_log("Unknown Node: %s", cur->name);
 	}
 
-	/* Be a good boy and cleanup */
+	// Free the document
 	xmlFreeDoc(doc);
 	return 1;
 }
@@ -144,7 +135,7 @@ static void parse_stream_node(xmlDocPtr doc, xmlNsPtr ns, xmlNodePtr cur,
 			      ices_stream_t *stream) {
 	for (; cur; cur = cur->next) {
 		if (cur->type == XML_COMMENT_NODE)
-			continue;
+			continue; // Skip comment: It is not a setting
 
 		if (xmlstrcmp(cur->name, "Server") == 0)
 			parse_server_node(doc, ns, cur->xmlChildrenNode, stream);
@@ -163,9 +154,6 @@ static void parse_stream_node(xmlDocPtr doc, xmlNsPtr ns, xmlNodePtr cur,
 		} else if (xmlstrcmp(cur->name, "Mountpoint") == 0) {
 			ices_util_free(stream->mount);
 			stream->mount = ices_util_strdup(ices_xml_read_node(doc, cur));
-		} else if (xmlstrcmp(cur->name, "Dumpfile") == 0) {
-			ices_util_free(stream->dumpfile);
-			stream->dumpfile = ices_util_strdup(ices_xml_read_node(doc, cur));
 		} else if (xmlstrcmp(cur->name, "Bitrate") == 0)
 			stream->bitrate = atoi(ices_xml_read_node(doc, cur));
 		else if (xmlstrcmp(cur->name, "Public") == 0)
@@ -195,7 +183,7 @@ static void parse_server_node(xmlDocPtr doc, xmlNsPtr ns, xmlNodePtr cur,
 			      ices_stream_t *ices_config) {
 	for (; cur; cur = cur->next) {
 		if (cur->type == XML_COMMENT_NODE)
-			continue;
+			continue; // Skip comment: It is not a setting
 
 		if (xmlstrcmp(cur->name, "Port") == 0)
 			ices_config->port = atoi(ices_xml_read_node(doc, cur));
@@ -211,12 +199,11 @@ static void parse_server_node(xmlDocPtr doc, xmlNsPtr ns, xmlNodePtr cur,
 		} else if (xmlstrcmp(cur->name, "Protocol") == 0) {
 			unsigned char *str = (unsigned char *)ices_xml_read_node(doc, cur);
 
-			if (str && (xmlstrcasecmp(str, "icy") == 0))
-				ices_config->protocol = icy_protocol_e;
-			else if (str && (xmlstrcasecmp(str, "http") == 0))
-				ices_config->protocol = http_protocol_e;
-			else
-				ices_config->protocol = xaudiocast_protocol_e;
+			// Ensure the protocol is HTTP
+			if (!str || xmlstrcasecmp(str, "http") != 0) {
+				ices_log("Protocol must be http");
+				ices_setup_shutdown();
+			}
 		} else
 			ices_log("Unknown Server keyword: %s", cur->name);
 	}
@@ -227,15 +214,11 @@ static void parse_execution_node(xmlDocPtr doc, xmlNsPtr ns, xmlNodePtr cur,
 				 ices_config_t *ices_config) {
 	for (; cur; cur = cur->next) {
 		if (cur->type == XML_COMMENT_NODE)
-			continue;
+			continue; // Skip comment: It is not a setting
 
-		if (xmlstrcmp(cur->name, "Background") == 0)
-			ices_config->daemon = atoi(ices_xml_read_node(doc, cur));
-		else if (xmlstrcmp(cur->name, "Verbose") == 0)
-			ices_config->verbose = atoi(ices_xml_read_node(doc, cur));
-		else if (xmlstrcmp(cur->name, "CueFile") == 0)
-			ices_config->cuefile = atoi(ices_xml_read_node(doc, cur));
-		else if (xmlstrcmp(cur->name, "BaseDirectory") == 0) {
+		// Ignore CueFile (configs already on disk still contain it)
+		if (xmlstrcmp(cur->name, "CueFile") == 0) {
+		} else if (xmlstrcmp(cur->name, "BaseDirectory") == 0) {
 			if (ices_config->base_directory)
 				ices_config->base_directory =
 					ices_util_strdup(ices_xml_read_node(doc, cur));
@@ -250,25 +233,9 @@ static void parse_playlist_node(xmlDocPtr doc, xmlNsPtr ns, xmlNodePtr cur, ices
 
 	for (; cur; cur = cur->next) {
 		if (cur->type == XML_COMMENT_NODE)
-			continue;
+			continue; // Skip comment: It is not a setting
 
-		if (xmlstrcmp(cur->name, "Randomize") == 0)
-			ices_config->pm.randomize = atoi(ices_xml_read_node(doc, cur));
-		else if (xmlstrcmp(cur->name, "Type") == 0) {
-			unsigned char *str = (unsigned char *)ices_xml_read_node(doc, cur);
-			if (str && (xmlstrcmp(str, "python") == 0))
-				ices_config->pm.playlist_type = ices_playlist_python_e;
-			else if (str && (xmlstrcmp(str, "perl") == 0))
-				ices_config->pm.playlist_type = ices_playlist_perl_e;
-			else if (str && (xmlstrcmp(str, "script") == 0))
-				ices_config->pm.playlist_type = ices_playlist_script_e;
-			else
-				ices_config->pm.playlist_type = ices_playlist_builtin_e;
-		} else if (xmlstrcmp(cur->name, "File") == 0) {
-			ices_util_free(ices_config->pm.playlist_file);
-			ices_config->pm.playlist_file =
-				ices_util_strdup(ices_xml_read_node(doc, cur));
-		} else if (xmlstrcmp(cur->name, "Module") == 0) {
+		if (xmlstrcmp(cur->name, "Module") == 0) {
 			ices_util_free(ices_config->pm.module);
 			ices_config->pm.module = ices_util_strdup(ices_xml_read_node(doc, cur));
 		} else if (xmlstrcmp(cur->name, "Crossfade") == 0) {

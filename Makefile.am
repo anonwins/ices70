@@ -2,9 +2,9 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-SUBDIRS = src conf doc
+SUBDIRS = src conf
 
-EXTRA_DIST = README BUGS AUTHORS TODO INSTALL COPYING NEWS README.playlist
+EXTRA_DIST = COPYING README.md
 
 libtool: $(LIBTOOL_DEPS)
 	$(SHELL) ./config.status --recheck

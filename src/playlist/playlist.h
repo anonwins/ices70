@@ -23,21 +23,11 @@
 #define PLAYLIST_H 1
 
 /* Public function declarations */
-int ices_playlist_get_current_lineno(void);
 char *ices_playlist_get_next(void);
 char* ices_playlist_get_metadata(void);
-int ices_playlist_get_timelimit(void);
 int ices_playlist_initialize(void);
-int ices_playlist_reload(void);
 void ices_playlist_shutdown(void);
 
-int ices_playlist_builtin_initialize(playlist_module_t* pm);
 int ices_playlist_script_initialize(playlist_module_t* pm);
-#ifdef HAVE_LIBPYTHON
-int ices_playlist_python_initialize(playlist_module_t* pm);
-#endif
-#ifdef HAVE_LIBPERL
-int ices_playlist_perl_initialize(playlist_module_t* pm);
-#endif
 
 #endif

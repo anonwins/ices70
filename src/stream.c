@@ -70,45 +70,37 @@ void ices_stream_loop(ices_config_t* config) {
 	input_stream_t source;
 	ices_stream_t* stream;
 	int rc;
-	int timelimit;
-	time_t now;
 
 	while (1) {
+		// Get the next file
 		source.path = ices_playlist_get_next();
 
+		// Ensure the playlist returned a path
 		if (!(source.path && source.path[0])) {
 			ices_log("Playlist handler returned an empty file name; no media to play, shutting down.");
 			ices_setup_shutdown();
 		}
 
-		ices_cue_set_lineno(ices_playlist_get_current_lineno());
-
+		// Clear the previous title and remember the filename
 		ices_metadata_set(NULL, NULL);
 		ices_metadata_set_file(source.path);
 
-		/* This stops ices from entering a loop with 10-20 lines of output per
-		     second. Usually caused by a playlist handler that produces only
-		     invalid file names. */
+		// Ensure this pass has not failed ten times
 		if (consecutive_errors > 10) {
 			ices_log("Exiting after 10 consecutive errors.");
 			ices_util_free(source.path);
 			ices_setup_shutdown();
 		}
 
+		// Open the file
 		if (stream_open_source(&source) < 0) {
 			ices_log("Error opening %s: %s", source.path, ices_log_get_error());
 			ices_util_free(source.path);
 			consecutive_errors++;
-			continue;
+			continue; // Skip file: It did not open
 		}
 
-		source.interrupttime = 0;
-		timelimit = ices_playlist_get_timelimit();
-		if (timelimit) {
-			now = time(NULL);
-			source.interrupttime = (time_t) ( (int) now + timelimit );
-		}
-
+		// If the file is not MP3, ensure reencode is on
 		if (!source.read)
 			for (stream = config->streams; stream; stream = stream->next)
 				if (!stream->reencode) {
@@ -116,24 +108,29 @@ void ices_stream_loop(ices_config_t* config) {
 					source.close(&source);
 					ices_util_free(source.path);
 					consecutive_errors++;
-					continue;
+					continue; // Skip stream: Reencode is off
 				}
 
+		// Send the file
 		rc = stream_send(config, &source);
+
+		// Close the file
 		source.close(&source);
 
-		/* If something goes on while transfering, we just go on */
+		// If the send failed, count the error
 		if (rc < 0) {
 			ices_log("Encountered error while transfering %s: %s", source.path, ices_log_get_error());
 
 			consecutive_errors++;
 
 			ices_util_free(source.path);
-			continue;
-		} else
-			/* Reset the consecutive error counter */
-			consecutive_errors = 0;
+			continue; // Skip file: The send failed
+		}
 
+		// Clear the error count
+		consecutive_errors = 0;
+
+		// Free the path
 		ices_util_free(source.path);
 	}
 }
@@ -165,6 +162,7 @@ static int stream_send(ices_config_t* config, input_stream_t* source) {
 #endif
 
 #ifdef HAVE_LIBLAME
+	// Prepare the encode buffer when this stream reencodes
 	obuf.data = NULL;
 	obuf.len = 0;
 
@@ -191,17 +189,20 @@ static int stream_send(ices_config_t* config, input_stream_t* source) {
 	}
 #endif
 
+	// Clear the stream error counts
 	for (stream = config->streams; stream; stream = stream->next)
 		stream->errs = 0;
 
+	// Announce the track and send its title
 	ices_log("Playing %s", source->path);
 
 	ices_metadata_update(0);
 
+	// Read and send until the track ends
 	finish_send = 0;
 	while (!finish_send) {
 		len = samples = 0;
-		/* fetch input buffer */
+		// Read the next input
 		if (source->read) {
 			len = source->read(source, ibuf, sizeof(ibuf));
 #ifdef HAVE_LIBLAME
@@ -222,6 +223,7 @@ static int stream_send(ices_config_t* config, input_stream_t* source) {
 #endif
     }
 
+	// Apply ReplayGain
 	if (samples > 0) {
 		/* ices_log_debug("Applying track gain to %d samples.", samples); */
 		rg_apply(left, samples);
@@ -232,12 +234,13 @@ static int stream_send(ices_config_t* config, input_stream_t* source) {
     }
 
 #ifdef HAVE_LIBLAME
-		/* run output through plugin */
+		// Run the crossfade plugin
 		for (plugin = config->plugins; plugin; plugin = plugin->next)
 			if (samples > 0)
 				samples = plugin->process(samples, left, right);
 #endif
 
+		// Ensure the read produced data
 		if (len == 0) {
 			ices_log_debug("Done sending");
 			break;
@@ -247,6 +250,7 @@ static int stream_send(ices_config_t* config, input_stream_t* source) {
 			goto err;
 		}
 
+		// Send the buffer to each stream
 		do_sleep = 1;
 		while (do_sleep) {
 			rc = olen = 0;
@@ -311,11 +315,10 @@ static int stream_send(ices_config_t* config, input_stream_t* source) {
 				}
 			}
 		}
-		ices_cue_update(source);
-		if ( source->interrupttime && time(NULL)>=source->interrupttime ) finish_send = 1;
 	}
 
 #ifdef HAVE_LIBLAME
+	// Flush the encoder when crossfade is off
 	if (!config->plugins) /* flush is only necessary if we're not continuously reencoding */
 		for (stream = config->streams; stream; stream = stream->next)
 			if (stream->reencode && stream_needs_reencoding(source, stream)) {

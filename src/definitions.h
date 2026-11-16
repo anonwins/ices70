@@ -93,7 +93,6 @@
 #include "stream.h"
 #include "log.h"
 #include "util.h"
-#include "cue.h"
 #include "id3.h"
 #include "mp3.h"
 #include "signals.h"
@@ -105,7 +104,6 @@
 #define CFOPT_CROSSMIX 2
 
 ices_plugin_t *crossfade_plugin(int secs);
-ices_plugin_t *replaygain_plugin(void);
 /*
 void rg_set_track_gain(double);
 void rg_set_track_gain(double gain);
@@ -118,7 +116,6 @@ double rg_get_track_gain(void);
 #define ICES_DEFAULT_MOUNT "/ices"
 #define ICES_DEFAULT_USER "source"
 #define ICES_DEFAULT_PASSWORD "letmein"
-#define ICES_DEFAULT_PROTOCOL http_protocol_e
 #define ICES_DEFAULT_NAME "Default stream name"
 #define ICES_DEFAULT_GENRE "Default genre"
 #define ICES_DEFAULT_DESCRIPTION "Default description"
@@ -127,13 +124,8 @@ double rg_get_track_gain(void);
 #define ICES_DEFAULT_ISPUBLIC 1
 #define ICES_DEFAULT_MODULE "ices"
 #define ICES_DEFAULT_CONFIGFILE "ices.conf"
-#define ICES_DEFAULT_PLAYLIST_FILE "playlist.txt"
-#define ICES_DEFAULT_RANDOMIZE_PLAYLIST 0
-#define ICES_DEFAULT_DAEMON 0
 #define ICES_DEFAULT_BASE_DIRECTORY "/tmp"
-#define ICES_DEFAULT_PLAYLIST_TYPE ices_playlist_builtin_e;
 #define ICES_DEFAULT_VERBOSE 0
 #define ICES_DEFAULT_REENCODE 0
-#define ICES_DEFAULT_CUEFILE 0
 
 #endif
