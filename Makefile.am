@@ -4,7 +4,7 @@ ACLOCAL_AMFLAGS = -I m4
 
 SUBDIRS = src conf
 
-EXTRA_DIST = COPYING README.md
+EXTRA_DIST = README.md
 
 libtool: $(LIBTOOL_DEPS)
 	$(SHELL) ./config.status --recheck
