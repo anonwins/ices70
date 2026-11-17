@@ -19,6 +19,8 @@
  */
 
 #include "definitions.h"
+
+extern ices_config_t ices_config;
 #include "metadata.h"
 #include "replaygain.h"
 #include "in_ffmpeg.h"
@@ -44,6 +46,7 @@ static int stream_send_data(ices_stream_t* stream, unsigned char* buf, size_t le
 static int stream_send_one(ices_stream_t* stream, unsigned char* buf, size_t len);
 static int stream_send(ices_config_t* config, input_stream_t* source);
 static int stream_send_silence(ices_config_t* config, int* announced);
+static void stream_set_reencoding(int reencoding);
 static int stream_open_source(ices_config_t* config, input_stream_t* source);
 static int stream_mp3_can_copy(ices_config_t* config, input_stream_t* source);
 
@@ -194,6 +197,8 @@ static int stream_send_copy(ices_config_t* config, input_stream_t* source) {
 	ssize_t len;
 
 	stream_flush_encoder(config);
+	// This track is a copy. The reencoding file must not stay from the previous song
+	stream_set_reencoding(0);
 	ices_log("Playing %s", source->path);
 	ices_metadata_update(0);
 	finish_send = 0;
@@ -221,6 +226,8 @@ static int stream_send_decoded(ices_config_t* config, input_stream_t* source) {
 	for (plugin = config->plugins; plugin; plugin = plugin->next)
 		plugin->new_track(source);
 
+	// This track is encoded. The file is in place before the title is published
+	stream_set_reencoding(1);
 	ices_log("Playing %s", source->path);
 	ices_metadata_update(0);
 	finish_send = 0;
@@ -260,12 +267,38 @@ static int stream_send_silence(ices_config_t* config, int* announced) {
 		ices_playlist_clear_metadata();
 		ices_metadata_set(NULL, NULL);
 		ices_metadata_set_file(NULL);
+		stream_set_reencoding(0);
 		ices_metadata_update(0);
 		*announced = 1;
 	}
 
 	// Do not call new_track. An empty file would make the crossfader skip the next fade
 	return stream_send_pcm(config, left, right, SILENCE_SAMPLES);
+}
+
+/* Leave BaseDirectory/reencoding present only while the current track is encoded. */
+static void stream_set_reencoding(int reencoding) {
+	char path[1024];
+	FILE *file;
+
+	// Ensure the base directory can hold the file name
+	if (!ices_config.base_directory ||
+	    strlen(ices_config.base_directory) > sizeof(path) - strlen("/reencoding") - 1)
+		return;
+
+	snprintf(path, sizeof(path), "%s/reencoding", ices_config.base_directory);
+	if (!reencoding) {
+		unlink(path);
+		return;
+	}
+
+	// Create the empty marker. A failure leaves the previous file and playback continues
+	file = fopen(path, "a");
+	if (!file) {
+		ices_log_error("Could not record reencoding");
+		return;
+	}
+	fclose(file);
 }
 
 /* A matching MP3 is copied. ReplayGain, crossfade, or a different format encodes it. */
