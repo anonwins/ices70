@@ -268,7 +268,8 @@ static int stream_send_silence(ices_config_t* config, int* announced) {
 		ices_metadata_set(NULL, NULL);
 		ices_metadata_set_file(NULL);
 		stream_set_reencoding(0);
-		ices_metadata_update(0);
+		// The source may not be accepted yet. The non-zero argument waits
+		ices_metadata_update(1);
 		*announced = 1;
 	}
 
@@ -301,7 +302,7 @@ static void stream_set_reencoding(int reencoding) {
 	fclose(file);
 }
 
-/* A matching MP3 is copied. ReplayGain, crossfade, or a different format encodes it. */
+/* A known-safe CBR MP3 is copied. Anything uncertain is encoded. */
 static int stream_mp3_can_copy(ices_config_t* config, input_stream_t* source) {
 	ices_stream_t* stream;
 
@@ -312,11 +313,14 @@ static int stream_mp3_can_copy(ices_config_t* config, input_stream_t* source) {
 	if (!source->bitrate)
 		return 0; // VBR, or a header bitrate the stream does not use
 	for (stream = config->streams; stream; stream = stream->next) {
-		if (source->bitrate != (unsigned int)stream->bitrate)
+		// An unset rate or channel count is not a match
+		if (stream->out_samplerate <= 0 || stream->out_numchannels <= 0)
 			return 0;
-		if (stream->out_samplerate > 0 && source->samplerate != (unsigned int)stream->out_samplerate)
+		if (source->bitrate > (unsigned int)stream->bitrate)
+			return 0; // The file would send more than the stream bitrate
+		if (source->samplerate != (unsigned int)stream->out_samplerate)
 			return 0;
-		if (stream->out_numchannels > 0 && source->channels != (unsigned int)stream->out_numchannels)
+		if (source->channels != (unsigned int)stream->out_numchannels)
 			return 0;
 	}
 	return 1;

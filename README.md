@@ -16,7 +16,7 @@ The sample configuration is [`conf/ices70.conf.dist.in`](conf/ices70.conf.dist.i
 
 FFmpeg opens every file. Everything sent to the server is MP3 at `Stream/Bitrate`, `Stream/Samplerate`, and `Stream/Channels`.
 
-A file is copied through when it is MP3, its bitrate, samplerate, and channels already match the stream, crossfade is off, and ReplayGain has nothing to apply. A VBR file whose header bitrate differs from the stream is encoded. Every other file is decoded to PCM and encoded with LAME. Crossfade and ReplayGain need samples, so a matching MP3 is encoded when either of those is on.
+A CBR MP3 is copied when its bitrate is at or below the stream bitrate, the stream samplerate and channel count are set and match the file, crossfade is off, and ReplayGain has nothing to apply. A VBR file, a file above the stream bitrate, or a file whose rate or channel count is not known to match is encoded. Every other file is decoded to PCM and encoded with LAME. Crossfade and ReplayGain need samples, so a matching MP3 is encoded when either of those is on.
 
 ReplayGain is read from the file tags. Crossfade length, a full-volume crossmix, and a minimum track length for the crossfader are `Playlist/Crossfade`, `Playlist/CrossMix`, and `Playlist/MinCrossfade`. `Crossfade` is read before the other two.
 
